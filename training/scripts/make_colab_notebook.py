@@ -4,9 +4,10 @@ import json
 import pathlib
 
 
-def code(src):
+def code(src, cell_id):
     return {
         "cell_type": "code",
+        "id": cell_id,
         "execution_count": None,
         "metadata": {},
         "outputs": [],
@@ -14,9 +15,10 @@ def code(src):
     }
 
 
-def md(src):
+def md(src, cell_id):
     return {
         "cell_type": "markdown",
+        "id": cell_id,
         "metadata": {},
         "source": src.strip("\n").splitlines(keepends=True),
     }
@@ -91,16 +93,16 @@ print("saved to", DRIVE_ART / "model_v1_run")"""
 
 def main() -> None:
     cells = [
-        md(CELL1),
-        code(CELL2),
-        code(CELL3),
-        code(CELL4),
-        code(CELL5),
-        code(CELL6),
-        code(CELL7),
-        code(CELL8),
-        code(CELL9),
-        code(CELL10),
+        md(CELL1, "cell-intro"),
+        code(CELL2, "cell-clone"),
+        code(CELL3, "cell-install"),
+        code(CELL4, "cell-gpu"),
+        code(CELL5, "cell-drive"),
+        code(CELL6, "cell-data"),
+        code(CELL7, "cell-train"),
+        code(CELL8, "cell-export"),
+        code(CELL9, "cell-eval"),
+        code(CELL10, "cell-save"),
     ]
     nb = {
         "nbformat": 4,
