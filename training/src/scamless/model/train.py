@@ -25,8 +25,8 @@ from transformers import (
     TrainingArguments,
 )
 
+from scamless import labels as labels_schema
 from scamless.aug.adversarial import apply_all
-from scamless.labels import NUM_SCAM_LABELS, labels_to_vector
 
 
 class MultiLabelDataset(Dataset):
@@ -103,16 +103,32 @@ class MultiTaskTrainer(Trainer):
 
 
 def build_dataset(df, tokenizer, cfg, adversarial_rate: float) -> MultiLabelDataset:
-    texts, vectors = [], []
+    texts, vectors, augmented = [], [], []
     rng = random.Random(cfg.seed)
     for _, row in df.iterrows():
         text = str(row["text"])
         labels = list(row["labels"])
-        if labels and adversarial_rate > 0 and rng.random() < adversarial_rate:
+        is_aug = bool(labels) and adversarial_rate > 0 and rng.random() < adversarial_rate
+        if is_aug:
             text = apply_all(text, rng)
         texts.append(text)
-        vectors.append(labels_to_vector(labels))
-    return MultiLabelDataset(texts, vectors, tokenizer, cfg.max_len)
+        augmented.append(is_aug)
+        vectors.append(labels_schema.labels_to_vector(labels))
+
+    span_masks = None
+    if getattr(cfg, "spans_file", ""):
+        from scamless.data.spans import build_span_masks, load_spans
+
+        span_records = load_spans(cfg.spans_file)
+        # spans align to original text only; augmented rows lose their spans
+        # (annotating warped text is invalid - offsets no longer match)
+        unaugmented_texts = [
+            t if not is_aug else "" for t, is_aug in zip(texts, augmented)
+        ]
+        span_masks = build_span_masks(unaugmented_texts, span_records, tokenizer, cfg.max_len)
+        print(f"span annotations loaded from {cfg.spans_file}")
+
+    return MultiLabelDataset(texts, vectors, tokenizer, cfg.max_len, span_masks=span_masks)
 
 
 def set_seed(seed: int) -> None:
@@ -121,22 +137,68 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
 
 
-def train_model(train_df, val_df, cfg):
-    set_seed(cfg.seed)
-    tokenizer = AutoTokenizer.from_pretrained(cfg.backbone)
-    model = AutoModelForSequenceClassification.from_pretrained(
+def expand_classifier_head(model, old_num_labels: int, new_num_labels: int) -> None:
+    """Grow the classifier head when labels were appended (append-only contract).
+
+    Old rows are preserved exactly; new rows start near-zero so old knowledge
+    is untouched until the new labels get training signal.
+    """
+    if old_num_labels >= new_num_labels:
+        return
+    weight = model.classifier.weight.data
+    bias = model.classifier.bias.data
+    hidden = weight.size(1)
+    new_weight = torch.zeros(new_num_labels, hidden, dtype=weight.dtype)
+    new_bias = torch.zeros(new_num_labels, dtype=bias.dtype)
+    new_weight[:old_num_labels] = weight
+    new_bias[:old_num_labels] = bias
+    model.classifier.weight = torch.nn.Parameter(new_weight)
+    model.classifier.bias = torch.nn.Parameter(new_bias)
+
+
+def load_model(cfg):
+    """Load the base backbone, or a previous checkpoint with head expansion.
+
+    The checkpoint is loaded with its ORIGINAL head width (preserving all old
+    label rows), then the head is grown to the current schema width. Loading
+    with ignore_mismatched_sizes would silently reinitialize the classifier
+    and destroy previous label knowledge.
+    """
+    from transformers import AutoConfig
+
+    if cfg.init_from:
+        old_cfg = AutoConfig.from_pretrained(cfg.init_from)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            cfg.init_from,
+            num_labels=old_cfg.num_labels,
+            problem_type="multi_label_classification",
+            output_hidden_states=True,
+        )
+        expand_classifier_head(model, old_cfg.num_labels, labels_schema.NUM_SCAM_LABELS)
+        print(
+            f"resumed from {cfg.init_from}: classifier head "
+            f"{old_cfg.num_labels} -> {labels_schema.NUM_SCAM_LABELS} labels"
+        )
+        return model
+    return AutoModelForSequenceClassification.from_pretrained(
         cfg.backbone,
-        num_labels=NUM_SCAM_LABELS,
+        num_labels=labels_schema.NUM_SCAM_LABELS,
         problem_type="multi_label_classification",
         output_hidden_states=True,
     )
+
+
+def train_model(train_df, val_df, cfg):
+    set_seed(cfg.seed)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.backbone)
+    model = load_model(cfg)
 
     train_ds = build_dataset(train_df, tokenizer, cfg, cfg.adversarial_rate)
     val_ds = build_dataset(val_df, tokenizer, cfg, adversarial_rate=0.0)
     print(f"train examples: {len(train_ds)}, val examples: {len(val_ds)}", flush=True)
 
     # pos_weight: inverse frequency per label, capped to keep loss stable
-    vecs = np.array([labels_to_vector(list(r["labels"])) for _, r in train_df.iterrows()])
+    vecs = np.array([labels_schema.labels_to_vector(list(r["labels"])) for _, r in train_df.iterrows()])
     pos = vecs.sum(axis=0)
     pos_weight = torch.tensor(
         np.clip((len(vecs) - pos) / np.maximum(pos, 1.0), 1.0, 10.0), dtype=torch.float
@@ -161,7 +223,7 @@ def train_model(train_df, val_df, cfg):
         args=args,
         train_dataset=train_ds,
         pos_weight=pos_weight,
-        num_tactic_tags=0,
+        num_tactic_tags=len(labels_schema.TACTIC_TAGS),
     )
     trainer.train()
 
@@ -170,6 +232,8 @@ def train_model(train_df, val_df, cfg):
     out_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(out_dir)
     tokenizer.save_pretrained(out_dir)
+    if hasattr(trainer, "_span_head"):
+        torch.save(trainer._span_head.state_dict(), out_dir / "span_head.pt")
 
     # validation metrics with 0.5 threshold
     device = next(model.parameters()).device
@@ -190,7 +254,7 @@ def train_model(train_df, val_df, cfg):
                 print(f"  validation {min(i + eval_bs, len(val_ds))}/{len(val_ds)}", flush=True)
         probs = torch.sigmoid(torch.cat(logits)).cpu().numpy()
     preds = (probs > 0.5).astype(int)
-    truth = np.array([labels_to_vector(list(r["labels"])) for _, r in val_df.iterrows()])
+    truth = np.array([labels_schema.labels_to_vector(list(r["labels"])) for _, r in val_df.iterrows()])
     # macro-F1 over supported labels only (same definition as the eval harness)
     support = truth.sum(axis=0) > 0
     val_f1 = float(f1_score(truth, preds, average="macro", zero_division=0))
