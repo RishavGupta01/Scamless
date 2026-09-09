@@ -133,6 +133,7 @@ def train_model(train_df, val_df, cfg):
 
     train_ds = build_dataset(train_df, tokenizer, cfg, cfg.adversarial_rate)
     val_ds = build_dataset(val_df, tokenizer, cfg, adversarial_rate=0.0)
+    print(f"train examples: {len(train_ds)}, val examples: {len(val_ds)}", flush=True)
 
     # pos_weight: inverse frequency per label, capped to keep loss stable
     vecs = np.array([labels_to_vector(list(r["labels"])) for _, r in train_df.iterrows()])
@@ -175,6 +176,7 @@ def train_model(train_df, val_df, cfg):
     model.eval()
     logits = []
     eval_bs = cfg.batch_size * 4
+    print(f"validating on {len(val_ds)} examples (device: {device})...", flush=True)
     with torch.no_grad():
         for i in range(0, len(val_ds), eval_bs):
             batch = {
@@ -184,6 +186,8 @@ def train_model(train_df, val_df, cfg):
                 for k in ("input_ids", "attention_mask")
             }
             logits.append(model(**batch).logits)
+            if (i // eval_bs) % 10 == 0:
+                print(f"  validation {min(i + eval_bs, len(val_ds))}/{len(val_ds)}", flush=True)
         probs = torch.sigmoid(torch.cat(logits)).cpu().numpy()
     preds = (probs > 0.5).astype(int)
     truth = np.array([labels_to_vector(list(r["labels"])) for _, r in val_df.iterrows()])

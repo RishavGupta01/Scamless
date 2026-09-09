@@ -24,11 +24,20 @@ Training runs on Google Colab (free T4 GPU):
 
 ## Pipeline
 
+One command runs everything (use this for every training run):
+
+    python -m scamless.pipeline            # fetch, build, train, export, tune, eval, gate
+    python -m scamless.pipeline --skip-build --skip-fetch   # retrain on existing data
+
+Every step runs as a fresh subprocess, so a `git pull` before the run always
+takes effect. The gate exits nonzero and blocks the pipeline if quality
+regressed (macro-F1 below threshold or false-positive rate above threshold).
+
     fetch_all    download raw corpora (SMS, SpamAssassin, OpenPhish, Majestic, HF phishing texts)
-    build        parse, dedupe, split, write Parquet + label report
-    train        fine-tune multilingual MiniLM, 15-label sigmoid head
+    build        parse, dedupe, split, write Parquet + label report (--replay-glob for incremental runs)
+    train        fine-tune multilingual MiniLM, 15-label sigmoid head, weights saved before validation
     export_onnx  torch.onnx export + int8 dynamic quantization
-    run_eval     test-set metrics (onnx or heuristic baseline mode)
+    run_eval     test-set metrics, --tune calibrates per-label thresholds on validation
     gate         release gate: macro-F1 and false-positive-rate thresholds
 
 ## Status
