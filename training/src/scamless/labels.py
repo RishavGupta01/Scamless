@@ -22,6 +22,16 @@ SAFE = "safe"
 LABELS = SCAM_LABELS
 NUM_SCAM_LABELS = len(SCAM_LABELS)
 
+# Tactic tags for token-level span tagging (Phase 4: manipulation highlighting).
+# Append-only, like the scam labels: adding a tag never breaks old checkpoints.
+TACTIC_TAGS = [
+    "urgency",  # 0
+    "authority",  # 1
+    "fear",  # 2
+    "payment_pressure",  # 3
+]
+NUM_TACTIC_TAGS = len(TACTIC_TAGS)
+
 _INDEX = {name: i for i, name in enumerate(SCAM_LABELS)}
 
 

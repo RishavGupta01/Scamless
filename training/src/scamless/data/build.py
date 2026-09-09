@@ -3,6 +3,7 @@
 Usage: python -m scamless.data.build
 """
 
+import argparse
 import collections
 import json
 import pathlib
@@ -100,14 +101,35 @@ def split_records(
     return train, val, test
 
 
+def merge_replay(train: pd.DataFrame, replay_globs: list[str]) -> pd.DataFrame:
+    """Mix previously-trained data into the new train split (replay buffer).
+
+    Prevents catastrophic forgetting when extending the model with new
+    languages or categories: old examples re-enter training, test/val stay
+    composed of only the fresh build. Replay rows keep their labels as-is.
+    """
+    frames = [train]
+    for pattern in replay_globs:
+        for p in sorted(pathlib.Path().glob(pattern)):
+            old = pd.read_parquet(p)
+            old["source"] = "replay:" + old["source"].astype(str)
+            frames.append(old)
+            print(f"replay: merged {len(old)} rows from {p}")
+    return pd.concat(frames, ignore_index=True)
+
+
 def report(records: list[dict], url_records: list[dict], path: pathlib.Path) -> None:
     label_counts = collections.Counter(l for r in records for l in r["labels"])
+    source_counts = collections.Counter(r["source"] for r in records)
+    language_counts = collections.Counter(r.get("language", "en") for r in records)
     safe_count = sum(1 for r in records if not r["labels"])
     payload = {
         "messages_total": len(records),
         "messages_safe": safe_count,
         "messages_labeled": len(records) - safe_count,
         "label_counts": dict(label_counts.most_common()),
+        "source_counts": dict(source_counts.most_common()),
+        "language_counts": dict(language_counts.most_common()),
         "urls_total": len(url_records),
         "urls_malicious": sum(1 for u in url_records if u["malicious"]),
     }
@@ -115,11 +137,22 @@ def report(records: list[dict], url_records: list[dict], path: pathlib.Path) -> 
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--replay-glob",
+        nargs="*",
+        default=[],
+        help="glob of old message parquets to mix into the new train split",
+    )
+    args = parser.parse_args()
+
     messages = dedupe(collect_messages())
     url_records = collect_urls()
 
     msg_df = pd.DataFrame(messages)
     train, val, test = split_records(msg_df)
+    if args.replay_glob:
+        train = merge_replay(train, args.replay_glob)
 
     PROCESSED.mkdir(parents=True, exist_ok=True)
     train.to_parquet(PROCESSED / "messages_train.parquet")

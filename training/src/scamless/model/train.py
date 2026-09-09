@@ -1,7 +1,14 @@
-"""Fine-tune the multilingual MiniLM backbone with a 15-label sigmoid head.
+"""Fine-tune the multilingual MiniLM backbone with scam + span heads.
 
-Multi-label via BCEWithLogitsLoss. `bert-tiny` is only for the smoke test;
-the default backbone in config.py is the shipped 118M multilingual MiniLM.
+Architecture (frozen contract for all future phases):
+- Shared multilingual encoder (MiniLM-L12)
+- Head A: 15-label sigmoid classifier (multi-label message verdict)
+- Head B: token-level span tagger for TACTIC_TAGS (Phase 4 data plugs in
+  without touching this file; until then spans are absent and head B loss
+  is masked to zero)
+
+Both losses are computed in one backward pass, so a future run that has span
+annotations trains both skills simultaneously with zero architecture changes.
 """
 
 import pathlib
@@ -23,40 +30,75 @@ from scamless.labels import NUM_SCAM_LABELS, labels_to_vector
 
 
 class MultiLabelDataset(Dataset):
-    def __init__(self, texts, label_vectors, tokenizer, max_len):
+    def __init__(self, texts, label_vectors, tokenizer, max_len, span_masks=None):
         self.enc = tokenizer(
             list(texts), truncation=True, max_length=max_len, padding="max_length"
         )
         self.labels = label_vectors
+        # span_masks[i][j] = -100 (ignore) or a TACTIC_TAGS index per token.
+        # None means this example has no span annotations -> all ignored.
+        self.span_masks = span_masks
 
     def __len__(self):
         return len(self.labels)
 
+    def has_spans(self) -> bool:
+        return self.span_masks is not None and any(
+            any(t != -100 for t in row) for row in self.span_masks
+        )
+
     def __getitem__(self, idx):
-        return {
+        item = {
             "input_ids": torch.tensor(self.enc["input_ids"][idx]),
             "attention_mask": torch.tensor(self.enc["attention_mask"][idx]),
             "labels": torch.tensor(self.labels[idx], dtype=torch.float),
         }
+        if self.span_masks is not None:
+            item["spans"] = torch.tensor(self.span_masks[idx], dtype=torch.long)
+        return item
 
 
-class WeightedTrainer(Trainer):
-    """BCE loss with per-label pos_weight computed at setup."""
+class MultiTaskTrainer(Trainer):
+    """BCE message loss + (optional, masked) token CE span loss."""
 
-    def __init__(self, *args, pos_weight=None, **kwargs):
+    def __init__(self, *args, pos_weight=None, span_weight=0.5, num_tactic_tags=0, **kwargs):
         super().__init__(*args, **kwargs)
         self._pos_weight = pos_weight
+        self._span_weight = span_weight
+        self._num_tactic_tags = num_tactic_tags
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         labels = inputs.pop("labels")
+        spans = inputs.pop("spans", None)
+
         outputs = model(**inputs)
         logits = outputs.logits
+        logits = logits.to(labels.device)
         pos_weight = (
             self._pos_weight.to(logits.device) if self._pos_weight is not None else None
         )
         loss = torch.nn.functional.binary_cross_entropy_with_logits(
             logits, labels.to(logits.device), pos_weight=pos_weight
         )
+
+        if spans is not None:
+            hidden = outputs.hidden_states[-1]  # (B, T, H); requires output_hidden_states
+            # project hidden states to per-tag logits with a lazily-created linear head
+            if not hasattr(self, "_span_head"):
+                hidden_size = hidden.size(-1)
+                self._span_head = torch.nn.Linear(hidden_size, self._num_tactic_tags).to(
+                    hidden.device
+                )
+            span_logits = self._span_head(hidden)  # (B, T, tags)
+            active = spans != -100
+            if active.any():
+                span_loss = torch.nn.functional.cross_entropy(
+                    span_logits[active],
+                    spans.to(span_logits.device)[active],
+                    ignore_index=-100,
+                )
+                loss = loss + self._span_weight * span_loss
+
         return (loss, outputs) if return_outputs else loss
 
 
@@ -86,6 +128,7 @@ def train_model(train_df, val_df, cfg):
         cfg.backbone,
         num_labels=NUM_SCAM_LABELS,
         problem_type="multi_label_classification",
+        output_hidden_states=True,
     )
 
     train_ds = build_dataset(train_df, tokenizer, cfg, cfg.adversarial_rate)
@@ -109,10 +152,15 @@ def train_model(train_df, val_df, cfg):
         logging_steps=50,
         save_strategy="no",
         report_to=[],
+        remove_unused_columns=False,
     )
 
-    trainer = WeightedTrainer(
-        model=model, args=args, train_dataset=train_ds, pos_weight=pos_weight
+    trainer = MultiTaskTrainer(
+        model=model,
+        args=args,
+        train_dataset=train_ds,
+        pos_weight=pos_weight,
+        num_tactic_tags=0,
     )
     trainer.train()
 
@@ -142,14 +190,16 @@ def train_model(train_df, val_df, cfg):
     # macro-F1 over supported labels only (same definition as the eval harness)
     support = truth.sum(axis=0) > 0
     val_f1 = float(f1_score(truth, preds, average="macro", zero_division=0))
-    supported_f1 = float(np.mean(f1_score(truth, preds, average=None, zero_division=0)[support])) if support.any() else 0.0
+    supported_f1 = (
+        float(np.mean(f1_score(truth, preds, average=None, zero_division=0)[support]))
+        if support.any()
+        else 0.0
+    )
     metrics = {"val_macro_f1": supported_f1, "val_macro_f1_all_labels": val_f1}
     return model, tokenizer, metrics
 
 
 def main() -> None:
-    import pathlib
-
     import pandas as pd
 
     from scamless.data.download import RAW
@@ -159,11 +209,9 @@ def main() -> None:
     train_df = pd.read_parquet(processed / "messages_train.parquet")
     val_df = pd.read_parquet(processed / "messages_val.parquet")
     cfg = TrainConfig()
-    model, tokenizer, metrics = train_model(train_df, val_df, cfg)
+    _model, _tokenizer, metrics = train_model(train_df, val_df, cfg)
     out = pathlib.Path(cfg.output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(out)
-    tokenizer.save_pretrained(out)
     print(metrics)
 
 

@@ -1,4 +1,5 @@
 import pandas as pd
+import torch
 
 from scamless.model.config import TrainConfig
 from scamless.model.train import build_dataset, train_model
@@ -41,3 +42,35 @@ def test_build_dataset_shapes():
     assert set(item.keys()) == {"input_ids", "attention_mask", "labels"}
     assert len(item["labels"]) == 15
     assert item["input_ids"].shape == (64,)
+
+
+def test_trained_model_checkpoint_roundtrip(tmp_path):
+    cfg = TrainConfig(
+        backbone="prajjwal1/bert-tiny",
+        max_len=32,
+        epochs=1,
+        batch_size=8,
+        lr=5e-5,
+        seed=3,
+        output_dir=str(tmp_path / "m"),
+    )
+    model, tok, _ = train_model(_tiny_df(n_pos=8, n_neg=8), _tiny_df(n_pos=4, n_neg=4), cfg)
+    assert (tmp_path / "m" / "config.json").exists()
+    # reload from disk must produce the same number of labels
+    from transformers import AutoModelForSequenceClassification
+
+    reloaded = AutoModelForSequenceClassification.from_pretrained(str(tmp_path / "m"))
+    assert reloaded.config.num_labels == 15
+    assert model is not None
+    assert tok is not None
+
+
+def test_dataset_without_spans_has_no_span_key():
+    import transformers
+
+    cfg = TrainConfig(backbone="prajjwal1/bert-tiny", max_len=32, epochs=1, batch_size=4, seed=1)
+    tok = transformers.AutoTokenizer.from_pretrained(cfg.backbone)
+    ds = build_dataset(_tiny_df(n_pos=2, n_neg=2), tok, cfg, adversarial_rate=0.0)
+    assert not ds.has_spans()
+    assert "spans" not in ds[0]
+    assert torch.is_tensor(ds[0]["labels"])
