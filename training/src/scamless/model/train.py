@@ -50,8 +50,11 @@ class WeightedTrainer(Trainer):
         labels = inputs.pop("labels")
         outputs = model(**inputs)
         logits = outputs.logits
+        pos_weight = (
+            self._pos_weight.to(logits.device) if self._pos_weight is not None else None
+        )
         loss = torch.nn.functional.binary_cross_entropy_with_logits(
-            logits, labels, pos_weight=self._pos_weight
+            logits, labels.to(logits.device), pos_weight=pos_weight
         )
         return (loss, outputs) if return_outputs else loss
 
