@@ -139,9 +139,11 @@ def train_model(train_df, val_df, cfg):
         probs = torch.sigmoid(torch.cat(logits)).cpu().numpy()
     preds = (probs > 0.5).astype(int)
     truth = np.array([labels_to_vector(list(r["labels"])) for _, r in val_df.iterrows()])
-    val_macro_f1 = float(f1_score(truth, preds, average="macro", zero_division=0))
-
-    metrics = {"val_macro_f1": val_macro_f1}
+    # macro-F1 over supported labels only (same definition as the eval harness)
+    support = truth.sum(axis=0) > 0
+    val_f1 = float(f1_score(truth, preds, average="macro", zero_division=0))
+    supported_f1 = float(np.mean(f1_score(truth, preds, average=None, zero_division=0)[support])) if support.any() else 0.0
+    metrics = {"val_macro_f1": supported_f1, "val_macro_f1_all_labels": val_f1}
     return model, tokenizer, metrics
 
 
