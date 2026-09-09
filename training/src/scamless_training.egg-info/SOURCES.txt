@@ -1,8 +1,0 @@
-pyproject.toml
-src/scamless/__init__.py
-src/scamless_training.egg-info/PKG-INFO
-src/scamless_training.egg-info/SOURCES.txt
-src/scamless_training.egg-info/dependency_links.txt
-src/scamless_training.egg-info/requires.txt
-src/scamless_training.egg-info/top_level.txt
-tests/test_smoke.py
