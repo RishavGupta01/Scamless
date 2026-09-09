@@ -109,6 +109,12 @@ Detection tells users *this one* is a scam; awareness ensures they never fall fo
 - **Aesthetic:** dark-mode-first, minimal, typography-led, high contrast, generous whitespace, subtle micro-animations. Premium security product feel, not hobby tool.
 - **Three surfaces, one design language:** web app (hero scan bar, animated risk meter, Why panel, playbook), extension popup (compact verdict card, same meter), page banner (calm, dismissible).
 - **No-emoji rule (absolute):** zero emojis in UI, copy, code, docs, or commit messages. Icons come from an SVG set (Lucide). Risk levels use color + label + icon.
+- **Model loading UX (perceived performance):** the ~110MB int8 model is downloaded once and cached; the UI must make this feel intentional and progressive, never like a hang:
+  - Real download progress bar with MB counters (streams from CDN via fetch with ReadableStream) before first scan
+  - Staged messaging during load: "Getting smarter... 34 / 110 MB", then "Ready in 3... 2... 1"
+  - The app is fully interactive before the model arrives: scan input, Learn mode, encyclopedia, and sample demos all work instantly on static content; the risk meter activates the moment weights are cached
+  - First scan after load shows a "running locally" indicator; subsequent visits skip the download entirely (Cache API / IndexedDB persistence)
+  - Extension variant: the Web Store installs the model at extension install time, so users never see an in-browser download at all
 - **Accessibility:** WCAG AA, keyboard-first, screen-reader labels on all verdicts, i18n-ready strings from day one.
 - **Design system:** a design-consultation pass producing DESIGN.md (fonts, palette, components) happens before any UI code is written during implementation.
 
