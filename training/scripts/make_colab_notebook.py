@@ -31,9 +31,10 @@ Clones the repo, builds the dataset, fine-tunes, exports int8 ONNX, evals, gates
 
 CELL2 = """%cd /content
 !git clone https://github.com/RishavGupta01/Scamless.git scamless
-%cd /content/scamless"""
-
-CELL3 = """!pip install -q -e "training[dev]\""""
+%cd /content/scamless
+!pip install -q -e "training[dev]"
+import sys
+sys.path.insert(0, "/content/scamless/training/src")"""
 
 CELL4 = """!nvidia-smi
 import torch
@@ -51,6 +52,9 @@ CELL6 = """!python -m scamless.data.fetch_all
 !python -m scamless.data.build"""
 
 CELL7 = """import pathlib
+import sys
+sys.path.insert(0, "/content/scamless/training/src")
+
 import pandas as pd
 
 from scamless.model.config import TrainConfig
@@ -69,6 +73,8 @@ print(metrics)"""
 CELL8 = """!python -m scamless.model.export_onnx --model-dir artifacts/model_v1"""
 
 CELL9 = """import json
+import sys
+sys.path.insert(0, "/content/scamless/training/src")
 
 import pandas as pd
 
@@ -95,7 +101,6 @@ def main() -> None:
     cells = [
         md(CELL1, "cell-intro"),
         code(CELL2, "cell-clone"),
-        code(CELL3, "cell-install"),
         code(CELL4, "cell-gpu"),
         code(CELL5, "cell-drive"),
         code(CELL6, "cell-data"),
