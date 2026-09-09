@@ -24,7 +24,7 @@ def test_train_smoke_runs_and_returns_metrics():
         adversarial_rate=0.0,
         output_dir="artifacts/test_smoke",
     )
-    model, tok, metrics = train_model(_tiny_df(), _tiny_df(), cfg)
+    model, _tok, metrics = train_model(_tiny_df(), _tiny_df(), cfg)
     assert metrics["val_macro_f1"] >= 0.0
     assert model is not None
 

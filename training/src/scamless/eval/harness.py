@@ -39,7 +39,7 @@ def compute_metrics(df, preds: list[list[str]]) -> dict:
         "macro_f1": macro_f1,
         "false_positive_rate": fp_rate,
         "per_label": per_label,
-        "n": int(len(df)),
+        "n": len(df),
     }
 
 

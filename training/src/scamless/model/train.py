@@ -140,11 +140,12 @@ def main() -> None:
     import pandas as pd
 
     from scamless.data.download import RAW
+    from scamless.model.config import TrainConfig
 
     processed = RAW.parent / "processed"
-    cfg = TrainConfig()
     train_df = pd.read_parquet(processed / "messages_train.parquet")
     val_df = pd.read_parquet(processed / "messages_val.parquet")
+    cfg = TrainConfig()
     model, tokenizer, metrics = train_model(train_df, val_df, cfg)
     out = pathlib.Path(cfg.output_dir)
     out.mkdir(parents=True, exist_ok=True)

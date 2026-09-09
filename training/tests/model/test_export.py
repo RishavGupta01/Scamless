@@ -2,7 +2,6 @@ import numpy as np
 import onnxruntime as ort
 import pandas as pd
 import torch
-from transformers import AutoTokenizer
 
 from scamless.model.config import TrainConfig
 from scamless.model.export_onnx import export_and_quantize

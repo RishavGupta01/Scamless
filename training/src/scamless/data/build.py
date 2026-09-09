@@ -3,7 +3,6 @@
 Usage: python -m scamless.data.build
 """
 
-import argparse
 import collections
 import json
 import pathlib
@@ -55,8 +54,8 @@ def collect_messages() -> list[dict]:
         ds = load_dataset(enron.SOURCE_HF_ID)
         rows = [dict(r) for split in ds.values() for r in split]
         records.extend(enron.records_from_hf_rows(rows))
-    except Exception as exc:  # enron is optional for a build
-        print(f"enron skipped: {exc}")
+    except Exception:  # noqa: BLE001 - enron is optional for a build
+        print("enron skipped (offline or unavailable)")
 
     return records
 
@@ -116,9 +115,6 @@ def report(records: list[dict], url_records: list[dict], path: pathlib.Path) -> 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    args = parser.parse_args()
-
     messages = dedupe(collect_messages())
     url_records = collect_urls()
 

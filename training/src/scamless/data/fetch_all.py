@@ -3,7 +3,6 @@
 Usage: python -m scamless.data.fetch_all
 """
 
-import pathlib
 
 import requests
 
