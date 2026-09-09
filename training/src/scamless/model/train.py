@@ -4,6 +4,7 @@ Multi-label via BCEWithLogitsLoss. `bert-tiny` is only for the smoke test;
 the default backbone in config.py is the shipped 118M multilingual MiniLM.
 """
 
+import pathlib
 import random
 
 import numpy as np
@@ -115,6 +116,12 @@ def train_model(train_df, val_df, cfg):
     )
     trainer.train()
 
+    # persist weights BEFORE validation so a late-stage error never loses the run
+    out_dir = pathlib.Path(cfg.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(out_dir)
+    tokenizer.save_pretrained(out_dir)
+
     # validation metrics with 0.5 threshold
     device = next(model.parameters()).device
     model.eval()
@@ -129,7 +136,7 @@ def train_model(train_df, val_df, cfg):
                 for k in ("input_ids", "attention_mask")
             }
             logits.append(model(**batch).logits)
-        probs = torch.sigmoid(torch.cat(logits)).numpy()
+        probs = torch.sigmoid(torch.cat(logits)).cpu().numpy()
     preds = (probs > 0.5).astype(int)
     truth = np.array([labels_to_vector(list(r["labels"])) for _, r in val_df.iterrows()])
     val_macro_f1 = float(f1_score(truth, preds, average="macro", zero_division=0))
