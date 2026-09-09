@@ -66,6 +66,10 @@ A single small model is not the intelligence strategy; fusion of specialists is.
 
 - **Public corpora:** SMS Spam Collection, Nazario phishing corpus, SpamAssassin, Enron, PhishTank, OpenPhish, Tranco top-1M, Kaggle scam datasets.
 - **Synthetic multilingual expansion:** one-time generation per category across target languages using a frontier LLM (offline, part of the training pipeline only) plus back-translation augmentation. This is how multilingual coverage exists where public datasets do not.
+- **Language priority for expansion:**
+  - Tier 1 (India): Hindi, Hinglish (code-mixed), Bengali, Tamil, Telugu, Marathi, Gujarati, Kannada, Malayalam, Punjabi
+  - Tier 2 (international): Spanish, Portuguese (BR), French, Arabic, Indonesian, Russian, Vietnamese, Swahili, Nigerian English
+  - Rationale: scam volume concentration plus model backbone coverage; tier order sets synthetic-generation priority.
 - **Hard negatives (false-positive control):** real OTPs, legitimate bank alerts, delivery updates, meeting invites. False positives destroy trust, so precision is optimized as hard as recall.
 
 ## 7. Quality Targets ("Industry Beating" Defined)
@@ -73,7 +77,7 @@ A single small model is not the intelligence strategy; fusion of specialists is.
 | Metric | Target |
 |--------|--------|
 | Macro-F1, English phishing/spam | >= 0.95 |
-| Macro-F1, low-resource languages | >= 0.85 |
+| Macro-F1, low-resource languages | >= 0.85 (Tier 1 + Tier 2 language list, section 6) |
 | False-positive rate on benign corpora | < 1% |
 | Verdict latency, WebGPU | < 50ms |
 | Verdict latency, WASM | < 200ms |
