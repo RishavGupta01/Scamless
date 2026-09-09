@@ -1,4 +1,4 @@
-# ScamSense — On-Device Multilingual Scam Detector
+# Scamless — On-Device Multilingual Scam Detector
 
 **Date:** 2026-09-09
 **Status:** Approved design, pending implementation plan
