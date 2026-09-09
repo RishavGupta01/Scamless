@@ -39,9 +39,16 @@ def test_build_dataset_shapes():
     tok = transformers.AutoTokenizer.from_pretrained(cfg.backbone)
     ds = build_dataset(_tiny_df(n_pos=4, n_neg=4), tok, cfg, adversarial_rate=0.0)
     item = ds[0]
+    # dynamic padding: items are unpadded lists, collator produces tensors
     assert set(item.keys()) == {"input_ids", "attention_mask", "labels"}
     assert len(item["labels"]) == 15
-    assert item["input_ids"].shape == (64,)
+    assert len(item["input_ids"]) <= 64
+    batch = ds.collate([ds[0], ds[1]])
+    t = batch["input_ids"].shape[1]
+    assert batch["input_ids"].shape[0] == 2
+    assert batch["attention_mask"].shape == (2, t)
+    # shorter item must be padded to the longer one
+    assert t >= max(len(ds[0]["input_ids"]), len(ds[1]["input_ids"]))
 
 
 def test_trained_model_checkpoint_roundtrip(tmp_path):

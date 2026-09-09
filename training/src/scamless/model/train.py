@@ -30,11 +30,19 @@ from scamless.aug.adversarial import apply_all
 
 
 class MultiLabelDataset(Dataset):
+    """Unpadded storage + length-aware collation (2-3x faster than max_len padding).
+
+    Most messages are ~60-120 tokens; padding every row to 256 wastes the
+    majority of compute. Items stay variable-length; the collator pads to the
+    longest item in each batch.
+    """
+
     def __init__(self, texts, label_vectors, tokenizer, max_len, span_masks=None):
         self.enc = tokenizer(
-            list(texts), truncation=True, max_length=max_len, padding="max_length"
+            list(texts), truncation=True, max_length=max_len, add_special_tokens=True
         )
         self.labels = label_vectors
+        self.pad_token_id = tokenizer.pad_token_id
         # span_masks[i][j] = -100 (ignore) or a TACTIC_TAGS index per token.
         # None means this example has no span annotations -> all ignored.
         self.span_masks = span_masks
@@ -49,13 +57,29 @@ class MultiLabelDataset(Dataset):
 
     def __getitem__(self, idx):
         item = {
-            "input_ids": torch.tensor(self.enc["input_ids"][idx]),
-            "attention_mask": torch.tensor(self.enc["attention_mask"][idx]),
+            "input_ids": list(self.enc["input_ids"][idx]),
+            "attention_mask": list(self.enc["attention_mask"][idx]),
             "labels": torch.tensor(self.labels[idx], dtype=torch.float),
         }
         if self.span_masks is not None:
             item["spans"] = torch.tensor(self.span_masks[idx], dtype=torch.long)
         return item
+
+    def collate(self, batch):
+        """Pad a batch to its own longest member (dynamic padding)."""
+        max_t = max(len(b["input_ids"]) for b in batch)
+        out = {
+            "input_ids": torch.tensor(
+                [b["input_ids"] + [self.pad_token_id] * (max_t - len(b["input_ids"])) for b in batch]
+            ),
+            "attention_mask": torch.tensor(
+                [b["attention_mask"] + [0] * (max_t - len(b["attention_mask"])) for b in batch]
+            ),
+            "labels": torch.stack([b["labels"] for b in batch]),
+        }
+        if self.span_masks is not None:
+            out["spans"] = torch.stack([b["spans"][:max_t] for b in batch])
+        return out
 
 
 class MultiTaskTrainer(Trainer):
@@ -83,7 +107,6 @@ class MultiTaskTrainer(Trainer):
 
         if spans is not None:
             hidden = outputs.hidden_states[-1]  # (B, T, H); requires output_hidden_states
-            # project hidden states to per-tag logits with a lazily-created linear head
             if not hasattr(self, "_span_head"):
                 hidden_size = hidden.size(-1)
                 self._span_head = torch.nn.Linear(hidden_size, self._num_tactic_tags).to(
@@ -100,6 +123,29 @@ class MultiTaskTrainer(Trainer):
                 loss = loss + self._span_weight * span_loss
 
         return (loss, outputs) if return_outputs else loss
+
+    def get_train_dataloader(self):
+        from torch.utils.data import DataLoader
+
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.args.train_batch_size,
+            shuffle=True,
+            collate_fn=self.train_dataset.collate,
+            num_workers=self.args.dataloader_num_workers,
+        )
+
+    def get_eval_dataloader(self, eval_dataset=None):
+        from torch.utils.data import DataLoader
+
+        ds = eval_dataset if eval_dataset is not None else self.eval_dataset
+        return DataLoader(
+            ds,
+            batch_size=self.args.eval_batch_size,
+            shuffle=False,
+            collate_fn=ds.collate,
+            num_workers=self.args.dataloader_num_workers,
+        )
 
 
 def build_dataset(df, tokenizer, cfg, adversarial_rate: float) -> MultiLabelDataset:
@@ -188,22 +234,7 @@ def load_model(cfg):
     )
 
 
-def train_model(train_df, val_df, cfg):
-    set_seed(cfg.seed)
-    tokenizer = AutoTokenizer.from_pretrained(cfg.backbone)
-    model = load_model(cfg)
-
-    train_ds = build_dataset(train_df, tokenizer, cfg, cfg.adversarial_rate)
-    val_ds = build_dataset(val_df, tokenizer, cfg, adversarial_rate=0.0)
-    print(f"train examples: {len(train_ds)}, val examples: {len(val_ds)}", flush=True)
-
-    # pos_weight: inverse frequency per label, capped to keep loss stable
-    vecs = np.array([labels_schema.labels_to_vector(list(r["labels"])) for _, r in train_df.iterrows()])
-    pos = vecs.sum(axis=0)
-    pos_weight = torch.tensor(
-        np.clip((len(vecs) - pos) / np.maximum(pos, 1.0), 1.0, 10.0), dtype=torch.float
-    )
-
+def _make_trainer(model, train_ds, val_ds, cfg, pos_weight):
     args = TrainingArguments(
         output_dir=cfg.output_dir,
         num_train_epochs=cfg.epochs,
@@ -212,7 +243,7 @@ def train_model(train_df, val_df, cfg):
         learning_rate=cfg.lr,
         seed=cfg.seed,
         use_cpu=torch.cuda.is_available() is False,
-        fp16=torch.cuda.is_available(),  # T4/colab: ~1.5-2x faster, memory-safe with GradScaler
+        fp16=torch.cuda.is_available(),  # T4/colab: ~1.5-2x faster, GradScaler-protected
         tf32=(torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 7),
         dataloader_num_workers=2,
         logging_steps=50,
@@ -220,15 +251,58 @@ def train_model(train_df, val_df, cfg):
         report_to=[],
         remove_unused_columns=False,
     )
-
-    trainer = MultiTaskTrainer(
+    return MultiTaskTrainer(
         model=model,
         args=args,
         train_dataset=train_ds,
         pos_weight=pos_weight,
         num_tactic_tags=len(labels_schema.TACTIC_TAGS),
     )
-    trainer.train()
+
+
+def train_model(train_df, val_df, cfg):
+    # early guards: fail fast with a clear message instead of training garbage
+    if len(train_df) == 0 or len(val_df) == 0:
+        raise ValueError("empty train or val split - rebuild the dataset first")
+    n_labeled = int(train_df["labels"].map(len).sum())
+    if n_labeled == 0:
+        raise ValueError("no labeled examples in the train split - check the dataset build")
+    print(
+        f"train examples: {len(train_df)}, val examples: {len(val_df)}, "
+        f"labeled rows: {n_labeled}",
+        flush=True,
+    )
+
+    set_seed(cfg.seed)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.backbone)
+    model = load_model(cfg)
+
+    train_ds = build_dataset(train_df, tokenizer, cfg, cfg.adversarial_rate)
+    val_ds = build_dataset(val_df, tokenizer, cfg, adversarial_rate=0.0)
+
+    # pos_weight: inverse frequency per label, capped to keep loss stable
+    vecs = np.array(
+        [labels_schema.labels_to_vector(list(r["labels"])) for _, r in train_df.iterrows()]
+    )
+    pos = vecs.sum(axis=0)
+    pos_weight = torch.tensor(
+        np.clip((len(vecs) - pos) / np.maximum(pos, 1.0), 1.0, 10.0), dtype=torch.float
+    )
+
+    # OOM failsafe: halve the batch and retry once instead of dying
+    attempts = 0
+    while True:
+        trainer = _make_trainer(model, train_ds, val_ds, cfg, pos_weight)
+        try:
+            trainer.train()
+            break
+        except RuntimeError as exc:
+            if "out of memory" not in str(exc).lower() or attempts >= 1:
+                raise
+            attempts += 1
+            cfg.batch_size = max(4, cfg.batch_size // 2)
+            torch.cuda.empty_cache()
+            print(f"CUDA OOM - retrying with batch_size={cfg.batch_size}", flush=True)
 
     # persist weights BEFORE validation so a late-stage error never loses the run
     out_dir = pathlib.Path(cfg.output_dir)
@@ -238,7 +312,7 @@ def train_model(train_df, val_df, cfg):
     if hasattr(trainer, "_span_head"):
         torch.save(trainer._span_head.state_dict(), out_dir / "span_head.pt")
 
-    # validation metrics with 0.5 threshold
+    # validation metrics with 0.5 threshold (dynamic padding via collator)
     device = next(model.parameters()).device
     model.eval()
     logits = []
@@ -246,12 +320,9 @@ def train_model(train_df, val_df, cfg):
     print(f"validating on {len(val_ds)} examples (device: {device})...", flush=True)
     with torch.no_grad():
         for i in range(0, len(val_ds), eval_bs):
-            batch = {
-                k: torch.stack(
-                    [val_ds[j][k] for j in range(i, min(i + eval_bs, len(val_ds)))]
-                ).to(device)
-                for k in ("input_ids", "attention_mask")
-            }
+            items = [val_ds[j] for j in range(i, min(i + eval_bs, len(val_ds)))]
+            batch = val_ds.collate(items)
+            batch = {k: v.to(device) for k, v in batch.items() if k in ("input_ids", "attention_mask")}
             logits.append(model(**batch).logits)
             if (i // eval_bs) % 10 == 0:
                 print(f"  validation {min(i + eval_bs, len(val_ds))}/{len(val_ds)}", flush=True)
