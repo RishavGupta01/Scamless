@@ -90,21 +90,38 @@ def main() -> None:
 
     if args.mode == "onnx" and args.tune:
         from scamless.data.download import RAW
-        from scamless.eval.harness import save_metrics as _save
-        from scamless.eval.harness import tune_thresholds
-        from scamless.labels import labels_to_vector
+        from scamless.eval.harness import (
+            save_metrics as _save,
+        )
+        from scamless.eval.harness import (
+            truth_matrix as _truth,
+        )
+        from scamless.eval.harness import (
+            tune_thresholds,
+        )
 
-        val_df = pd.read_parquet(RAW.parent / "processed" / "messages_val.parquet")
-        val_probs = predict_onnx_probs(val_df.reset_index(drop=True), args.model_dir)
-        val_truth = np.array([labels_to_vector(list(r)) for _, r in val_df.iterrows()])
+        val_df = pd.read_parquet(
+            RAW.parent / "processed" / "messages_val.parquet"
+        ).reset_index(drop=True)
+        cache = pathlib.Path("artifacts/eval/val_probs.npy")
+        if cache.exists():
+            val_probs = np.load(cache)
+            print(f"loaded cached val probabilities from {cache}")
+        else:
+            val_probs = predict_onnx_probs(val_df, args.model_dir)
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            np.save(cache, val_probs)
+        val_truth = _truth(val_df)
         thresholds = tune_thresholds(val_probs, val_truth)
         threshold_path = pathlib.Path(args.model_dir) / "onnx" / "thresholds.json"
         threshold_path.write_text(json.dumps(thresholds, indent=2))
         val_preds = probs_to_labels(val_probs, thresholds)
-        val_metrics = compute_metrics(val_df.reset_index(drop=True), val_preds)
+        val_metrics = compute_metrics(val_df, val_preds)
         print("tuned thresholds:", thresholds)
-        print("val metrics (tuned):", json.dumps(
-            {k: val_metrics[k] for k in ("macro_f1", "false_positive_rate")}))
+        print(
+            "val metrics (tuned):",
+            json.dumps({k: val_metrics[k] for k in ("macro_f1", "false_positive_rate")}),
+        )
         _save(val_metrics, "artifacts/eval/metrics_val.json")
 
     df = load_test_df()

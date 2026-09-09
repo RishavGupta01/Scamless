@@ -49,6 +49,11 @@ def save_metrics(metrics: dict, path) -> None:
     path.write_text(json.dumps(metrics, indent=2))
 
 
+def truth_matrix(df) -> np.ndarray:
+    """(n, NUM_SCAM_LABELS) float matrix from a DataFrame with a 'labels' column."""
+    return np.array([labels_to_vector(list(r)) for r in df["labels"]])
+
+
 def tune_thresholds(probs, truth, sweep=None) -> dict:
     """Per-label F1-optimal thresholds from validation probabilities.
 
