@@ -37,7 +37,8 @@ def predict_onnx_probs(df: pd.DataFrame, model_dir: str, max_len: int = 256) -> 
 
     texts = [str(t) for t in df["text"]]
     probs_batches = []
-    for i in range(0, len(texts), 64):
+    total = len(texts)
+    for i in range(0, total, 64):
         enc = tokenizer(
             texts[i : i + 64],
             truncation=True,
@@ -53,6 +54,7 @@ def predict_onnx_probs(df: pd.DataFrame, model_dir: str, max_len: int = 256) -> 
             },
         )[0]
         probs_batches.append(1.0 / (1.0 + np.exp(-logits)))
+        print(f"  inference {min(i + 64, total)}/{total}", flush=True)
     return np.concatenate(probs_batches, axis=0)
 
 
