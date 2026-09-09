@@ -19,11 +19,22 @@ SPLITS = {"train": 0.8, "val": 0.1, "test": 0.1}
 
 def collect_messages() -> list[dict]:
     records: list[dict] = []
+    skipped = 0
 
-    sms_lines = (
-        (RAW / "sms" / "SMSSpamCollection").read_text(encoding="utf-8", errors="replace").splitlines()
-    )
-    records.extend(sms_spam.parse_sms_lines(sms_lines))
+    def guarded_parse(parse_fn, *args) -> dict | None:
+        nonlocal skipped
+        try:
+            return parse_fn(*args)
+        except Exception:  # noqa: BLE001 - one corrupt file must not kill the build
+            skipped += 1
+            return None
+
+    sms_path = RAW / "sms" / "SMSSpamCollection"
+    if sms_path.exists():
+        sms_lines = sms_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        records.extend(sms_spam.parse_sms_lines(sms_lines))
+    else:
+        print("sms corpus missing: run fetch_all first")
 
     sa_root = RAW / "spamassassin"
     if sa_root.exists():
@@ -32,14 +43,14 @@ def collect_messages() -> list[dict]:
                 continue
             for f in sorted(tar_dir.rglob("*")):
                 if f.is_file() and not f.name.startswith(("cmds", "dontbother", "ctstSkipped", "sbatch")):
-                    rec = spamassassin.parse_message_bytes(f.read_bytes(), tar_dir.name, f.name)
+                    rec = guarded_parse(spamassassin.parse_message_bytes, f.read_bytes(), tar_dir.name, f.name)
                     if rec:
                         records.append(rec)
 
     nz_root = RAW / "nazario"
     if nz_root.exists():
         for f in sorted(nz_root.rglob("*.eml")):
-            rec = nazario.parse_phishing_email(f.read_bytes(), f.name)
+            rec = guarded_parse(nazario.parse_phishing_email, f.read_bytes(), f.name)
             if rec:
                 records.append(rec)
 
@@ -58,6 +69,8 @@ def collect_messages() -> list[dict]:
     except Exception:  # noqa: BLE001 - enron is optional for a build
         print("enron skipped (offline or unavailable)")
 
+    if skipped:
+        print(f"skipped {skipped} unreadable source files")
     return records
 
 
@@ -106,15 +119,19 @@ def merge_replay(train: pd.DataFrame, replay_globs: list[str]) -> pd.DataFrame:
 
     Prevents catastrophic forgetting when extending the model with new
     languages or categories: old examples re-enter training, test/val stay
-    composed of only the fresh build. Replay rows keep their labels as-is.
+    composed of only the fresh build. Accepts absolute paths, relative
+    globs, and missing patterns (silently skipped so a missing replay file
+    never blocks a rebuild).
     """
     frames = [train]
     for pattern in replay_globs:
-        for p in sorted(pathlib.Path().glob(pattern)):
-            old = pd.read_parquet(p)
+        p = pathlib.Path(pattern)
+        candidates = [p] if p.is_file() else sorted(pathlib.Path().glob(pattern))
+        for path in candidates:
+            old = pd.read_parquet(path)
             old["source"] = "replay:" + old["source"].astype(str)
             frames.append(old)
-            print(f"replay: merged {len(old)} rows from {p}")
+            print(f"replay: merged {len(old)} rows from {path}")
     return pd.concat(frames, ignore_index=True)
 
 

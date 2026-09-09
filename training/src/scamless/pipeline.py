@@ -35,17 +35,41 @@ def main() -> None:
     parser.add_argument("--skip-build", action="store_true", help="data already built")
     parser.add_argument("--skip-fetch", action="store_true", help="raw data already downloaded")
     parser.add_argument("--model-dir", default="artifacts/model_v1")
+    parser.add_argument(
+        "--init-from",
+        default="",
+        help="previous checkpoint to resume from (head auto-expands for new labels)",
+    )
+    parser.add_argument(
+        "--replay-glob",
+        nargs="*",
+        default=[],
+        help="glob of old train parquets to mix into the new split (anti-forgetting)",
+    )
+    parser.add_argument(
+        "--spans-file",
+        default="",
+        help="JSONL span annotations for the tactic-span head (optional)",
+    )
     args = parser.parse_args()
 
     if not args.skip_fetch:
         run([sys.executable, "-m", "scamless.data.fetch_all"])
     if not args.skip_build:
-        run([sys.executable, "-m", "scamless.data.build"])
+        build_cmd = [sys.executable, "-m", "scamless.data.build"]
+        if args.replay_glob:
+            build_cmd.extend(["--replay-glob", *args.replay_glob])
+        run(build_cmd)
 
     report = json.loads((PROCESSED / "report.json").read_text())
     print(f"\nDataset: {json.dumps(report['label_counts'], indent=2)}")
 
-    run([sys.executable, "-m", "scamless.model.train"])  # uses TrainConfig defaults
+    train_cmd = [sys.executable, "-m", "scamless.model.train", "--model-dir", args.model_dir]
+    if args.init_from:
+        train_cmd.extend(["--init-from", args.init_from])
+    if args.spans_file:
+        train_cmd.extend(["--spans-file", args.spans_file])
+    run(train_cmd)
 
     run([sys.executable, "-m", "scamless.model.export_onnx", "--model-dir", args.model_dir])
     run([

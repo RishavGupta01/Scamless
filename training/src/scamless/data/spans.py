@@ -44,6 +44,11 @@ def align_spans(
     max_len: int,
 ) -> np.ndarray:
     """Return (max_len,) int array; -100 = ignore, else TACTIC_TAGS index."""
+    if not getattr(tokenizer, "is_fast", False):
+        raise TypeError(
+            "span alignment requires a fast tokenizer (offset mapping); "
+            "the trainer loads fast tokenizers by default"
+        )
     mask = np.full(max_len, IGNORE, dtype=np.int64)
     enc = tokenizer(text, truncation=True, max_length=max_len, return_offsets_mapping=True)
     offsets = enc["offset_mapping"]

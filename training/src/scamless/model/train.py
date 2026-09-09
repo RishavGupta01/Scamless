@@ -212,6 +212,9 @@ def train_model(train_df, val_df, cfg):
         learning_rate=cfg.lr,
         seed=cfg.seed,
         use_cpu=torch.cuda.is_available() is False,
+        fp16=torch.cuda.is_available(),  # T4/colab: ~1.5-2x faster, memory-safe with GradScaler
+        tf32=(torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 7),
+        dataloader_num_workers=2,
         logging_steps=50,
         save_strategy="no",
         report_to=[],
@@ -268,15 +271,29 @@ def train_model(train_df, val_df, cfg):
 
 
 def main() -> None:
+    import argparse
+
     import pandas as pd
 
     from scamless.data.download import RAW
     from scamless.model.config import TrainConfig
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model-dir", default="")
+    parser.add_argument("--init-from", default="")
+    parser.add_argument("--spans-file", default="")
+    args = parser.parse_args()
+
     processed = RAW.parent / "processed"
     train_df = pd.read_parquet(processed / "messages_train.parquet")
     val_df = pd.read_parquet(processed / "messages_val.parquet")
     cfg = TrainConfig()
+    if args.model_dir:
+        cfg.output_dir = args.model_dir
+    if args.init_from:
+        cfg.init_from = args.init_from
+    if args.spans_file:
+        cfg.spans_file = args.spans_file
     _model, _tokenizer, metrics = train_model(train_df, val_df, cfg)
     out = pathlib.Path(cfg.output_dir)
     out.mkdir(parents=True, exist_ok=True)

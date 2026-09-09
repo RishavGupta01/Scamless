@@ -30,8 +30,15 @@ Runtime > Change runtime type > **T4 GPU**, then Run all.
 Clones the repo, builds the dataset, fine-tunes, exports int8 ONNX, evals, gates, saves artifacts to Google Drive."""
 
 CELL2 = """%cd /content
-!git clone https://github.com/RishavGupta01/Scamless.git scamless
-%cd /content/scamless
+import pathlib, shutil
+
+if pathlib.Path("/content/scamless").exists():
+    %cd /content/scamless
+    !git fetch origin
+    !git reset --hard origin/main
+else:
+    !git clone https://github.com/RishavGupta01/Scamless.git /content/scamless
+    %cd /content/scamless
 !pip install -q -e "training[dev]"
 import sys
 sys.path.insert(0, "/content/scamless/training/src")"""
