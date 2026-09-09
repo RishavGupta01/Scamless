@@ -30,13 +30,13 @@ def predict_baseline(df: pd.DataFrame) -> list[list[str]]:
     return [heuristic_predict(str(t)) for t in df["text"]]
 
 
-def predict_onnx(df: pd.DataFrame, model_dir: str, max_len: int = 256) -> list[list[str]]:
+def predict_onnx_probs(df: pd.DataFrame, model_dir: str, max_len: int = 256) -> np.ndarray:
     onnx_path = pathlib.Path(model_dir) / "onnx" / "model_int8.onnx"
     sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
 
     texts = [str(t) for t in df["text"]]
-    preds = []
+    probs_batches = []
     for i in range(0, len(texts), 64):
         enc = tokenizer(
             texts[i : i + 64],
@@ -52,17 +52,58 @@ def predict_onnx(df: pd.DataFrame, model_dir: str, max_len: int = 256) -> list[l
                 "attention_mask": enc["attention_mask"].astype(np.int64),
             },
         )[0]
-        probs = 1.0 / (1.0 + np.exp(-logits))
-        for row in probs:
-            preds.append([SCAM_LABELS[j] for j in range(len(row)) if row[j] > 0.5])
-    return preds
+        probs_batches.append(1.0 / (1.0 + np.exp(-logits)))
+    return np.concatenate(probs_batches, axis=0)
+
+
+def load_thresholds(model_dir: str) -> dict:
+    path = pathlib.Path(model_dir) / "onnx" / "thresholds.json"
+    if path.exists():
+        return json.loads(path.read_text())
+    return {label: 0.5 for label in SCAM_LABELS}
+
+
+def probs_to_labels(probs: np.ndarray, thresholds: dict) -> list[list[str]]:
+    return [
+        [SCAM_LABELS[j] for j in range(probs.shape[1]) if row[j] > thresholds[SCAM_LABELS[j]]]
+        for row in probs
+    ]
+
+
+def predict_onnx(df: pd.DataFrame, model_dir: str, max_len: int = 256) -> list[list[str]]:
+    probs = predict_onnx_probs(df, model_dir, max_len)
+    return probs_to_labels(probs, load_thresholds(model_dir))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["baseline", "onnx"], default="baseline")
     parser.add_argument("--model-dir", default="artifacts/model_v1")
+    parser.add_argument(
+        "--tune",
+        action="store_true",
+        help="tune per-label thresholds on the val split before evaluating the test split",
+    )
     args = parser.parse_args()
+
+    if args.mode == "onnx" and args.tune:
+        from scamless.data.download import RAW
+        from scamless.eval.harness import save_metrics as _save
+        from scamless.eval.harness import tune_thresholds
+        from scamless.labels import labels_to_vector
+
+        val_df = pd.read_parquet(RAW.parent / "processed" / "messages_val.parquet")
+        val_probs = predict_onnx_probs(val_df.reset_index(drop=True), args.model_dir)
+        val_truth = np.array([labels_to_vector(list(r)) for _, r in val_df.iterrows()])
+        thresholds = tune_thresholds(val_probs, val_truth)
+        threshold_path = pathlib.Path(args.model_dir) / "onnx" / "thresholds.json"
+        threshold_path.write_text(json.dumps(thresholds, indent=2))
+        val_preds = probs_to_labels(val_probs, thresholds)
+        val_metrics = compute_metrics(val_df.reset_index(drop=True), val_preds)
+        print("tuned thresholds:", thresholds)
+        print("val metrics (tuned):", json.dumps(
+            {k: val_metrics[k] for k in ("macro_f1", "false_positive_rate")}))
+        _save(val_metrics, "artifacts/eval/metrics_val.json")
 
     df = load_test_df()
     preds = (

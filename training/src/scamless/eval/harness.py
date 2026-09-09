@@ -47,3 +47,28 @@ def save_metrics(metrics: dict, path) -> None:
     path = pathlib.Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(metrics, indent=2))
+
+
+def tune_thresholds(probs, truth, sweep=None) -> dict:
+    """Per-label F1-optimal thresholds from validation probabilities.
+
+    0.5 is an arbitrary default for independent sigmoids; class imbalance and
+    pos_weight capping shift every label's optimum. Returns {label: threshold}.
+    """
+    if sweep is None:
+        sweep = np.arange(0.05, 0.96, 0.05)
+    probs = np.asarray(probs)
+    truth = np.asarray(truth)
+    thresholds = {}
+    for j, name in enumerate(SCAM_LABELS):
+        if truth[:, j].sum() == 0:
+            thresholds[name] = 0.5
+            continue
+        scores = [
+            precision_recall_fscore_support(
+                truth[:, j], (probs[:, j] > t).astype(int), average="binary", zero_division=0
+            )[2]
+            for t in sweep
+        ]
+        thresholds[name] = float(sweep[int(np.argmax(scores))])
+    return thresholds

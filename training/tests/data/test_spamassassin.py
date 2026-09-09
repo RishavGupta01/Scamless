@@ -1,4 +1,4 @@
-from scamless.data.spamassassin import classify_dir, parse_message_bytes
+from scamless.data.spamassassin import classify_dir, enrich_labels, parse_message_bytes
 
 
 def test_classify_dir_names():
@@ -21,3 +21,19 @@ def test_parse_message_bytes():
 def test_short_bodies_dropped():
     raw = b"Subject: hi\r\n\r\nok\r\n"
     assert parse_message_bytes(raw, "spam_2", "x.eml") is None
+
+
+def test_phishing_styled_spam_gets_both_labels():
+    raw = (
+        b"Subject: security alert\r\n\r\n"
+        b"We detected unusual activity on your account. "
+        b"Please verify your account within 24 hours or access will be limited. "
+        b"Click here to login and confirm your identity now.\r\n"
+    )
+    record = parse_message_bytes(raw, "spam_2", "00042.abc")
+    assert set(record["labels"]) == {"generic_spam", "phishing"}
+
+
+def test_enrich_labels_ignores_non_spam():
+    assert enrich_labels("verify your account now", []) == []
+    assert enrich_labels("verify your account now", ["phishing"]) == ["phishing"]
