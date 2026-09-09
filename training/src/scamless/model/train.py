@@ -116,6 +116,7 @@ def train_model(train_df, val_df, cfg):
     trainer.train()
 
     # validation metrics with 0.5 threshold
+    device = next(model.parameters()).device
     model.eval()
     logits = []
     eval_bs = cfg.batch_size * 4
@@ -124,7 +125,7 @@ def train_model(train_df, val_df, cfg):
             batch = {
                 k: torch.stack(
                     [val_ds[j][k] for j in range(i, min(i + eval_bs, len(val_ds)))]
-                )
+                ).to(device)
                 for k in ("input_ids", "attention_mask")
             }
             logits.append(model(**batch).logits)
