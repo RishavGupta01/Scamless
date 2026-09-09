@@ -1,5 +1,6 @@
 """Email parsing shared by SpamAssassin and Nazario corpora."""
 
+import codecs
 import email
 from email.message import Message
 
@@ -28,4 +29,8 @@ def _decode_part(part: Message) -> str:
     if payload is None:
         return ""
     charset = part.get_content_charset() or "utf-8"
+    try:
+        codecs.lookup(charset)
+    except (LookupError, ValueError):
+        charset = "utf-8"
     return payload.decode(charset, errors="replace")
