@@ -244,7 +244,11 @@ def _make_trainer(model, train_ds, val_ds, cfg, pos_weight):
         seed=cfg.seed,
         use_cpu=torch.cuda.is_available() is False,
         fp16=torch.cuda.is_available(),  # T4/colab: ~1.5-2x faster, GradScaler-protected
-        tf32=(torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 7),
+        # tf32 requires Ampere (compute 8.0+); T4 is Turing 7.5 and rejects it
+        tf32=(
+            torch.cuda.is_available()
+            and torch.cuda.get_device_capability(0)[0] >= 8
+        ),
         dataloader_num_workers=2,
         logging_steps=50,
         save_strategy="no",
