@@ -251,7 +251,12 @@ def _make_trainer(model, train_ds, val_ds, cfg, pos_weight):
         ),
         dataloader_num_workers=2,
         logging_steps=50,
-        save_strategy="no",
+        # mid-training checkpoints survive session disconnects when
+        # output_dir is on Drive; resume_from_checkpoint picks them up
+        save_strategy="steps",
+        save_steps=3000,
+        save_total_limit=2,
+        save_only_model=True,  # weights only: keeps Drive usage sane
         report_to=[],
         remove_unused_columns=False,
     )
@@ -262,6 +267,11 @@ def _make_trainer(model, train_ds, val_ds, cfg, pos_weight):
         pos_weight=pos_weight,
         num_tactic_tags=len(labels_schema.TACTIC_TAGS),
     )
+
+
+def latest_checkpoint(output_dir: str) -> str | None:
+    dirs = sorted(pathlib.Path(output_dir).glob("checkpoint-*"))
+    return str(dirs[-1]) if dirs else None
 
 
 def train_model(train_df, val_df, cfg):
@@ -298,7 +308,7 @@ def train_model(train_df, val_df, cfg):
     while True:
         trainer = _make_trainer(model, train_ds, val_ds, cfg, pos_weight)
         try:
-            trainer.train()
+            trainer.train(resume_from_checkpoint=latest_checkpoint(cfg.output_dir))
             break
         except RuntimeError as exc:
             if "out of memory" not in str(exc).lower() or attempts >= 1:
