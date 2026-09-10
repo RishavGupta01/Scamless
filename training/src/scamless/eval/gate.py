@@ -24,6 +24,10 @@ def gate_fails(metrics: dict, config: dict) -> list[str]:
             f"false_positive_rate {metrics['false_positive_rate']:.4f} > "
             f"allowed {config['fp_rate_max']}"
         )
+    union_min = config.get("scam_union_f1_min", 0)
+    union_f1 = metrics.get("scam_union", {}).get("f1", 0.0)
+    if union_f1 < union_min:
+        failures.append(f"scam_union_f1 {union_f1:.3f} < required {union_min}")
     return failures
 
 
