@@ -104,6 +104,17 @@ def _max_prob_diff(fp32_path: pathlib.Path, int8_path: pathlib.Path, tokenizer) 
     return float(np.abs(pa - pb).max())
 
 
+def _convert_fp16(fp32_path: pathlib.Path, int8_path: pathlib.Path) -> None:
+    """fp16 halves the size with ~zero accuracy loss (transformers are fp16-safe)."""
+    try:
+        from onnxconverter_common import float16
+    except ImportError as exc:
+        raise RuntimeError("pip install onnxconverter-common") from exc
+    model = onnx.load(str(fp32_path))
+    model_fp16 = float16.convert_float_to_float16(model, keep_io_types=True)
+    onnx.save(model_fp16, str(int8_path))
+
+
 def export_and_quantize(model_dir: str) -> pathlib.Path:
     model_dir = pathlib.Path(model_dir)
     onnx_dir = model_dir / "onnx"
@@ -115,38 +126,56 @@ def export_and_quantize(model_dir: str) -> pathlib.Path:
     tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
     int8 = onnx_dir / "model_int8.onnx"
 
-    # strategy 1: per-channel int8 (standard; per-tensor destroyed logits by 0.51)
-    quantize_dynamic(
-        model_input=str(fp32),
-        model_output=str(int8),
-        weight_type=QuantType.QInt8,
-        per_channel=True,
-        reduce_range=False,
-    )
-    diff = _max_prob_diff(fp32, int8, tokenizer)
+    def q_int8() -> None:
+        quantize_dynamic(
+            model_input=str(fp32),
+            model_output=str(int8),
+            weight_type=QuantType.QInt8,
+            per_channel=True,
+            reduce_range=False,
+        )
 
-    if diff > 0.10:
-        print(f"per-channel parity diff {diff:.4f} > 0.10 - retrying with classifier excluded", flush=True)
+    def q_int8_no_classifier() -> None:
         exclude = _classifier_gemm_nodes(fp32)
-        if exclude:
-            quantize_dynamic(
-                model_input=str(fp32),
-                model_output=str(int8),
-                weight_type=QuantType.QInt8,
-                per_channel=True,
-                reduce_range=False,
-                nodes_to_exclude=exclude,
-            )
-            diff = _max_prob_diff(fp32, int8, tokenizer)
+        quantize_dynamic(
+            model_input=str(fp32),
+            model_output=str(int8),
+            weight_type=QuantType.QInt8,
+            per_channel=True,
+            reduce_range=False,
+            nodes_to_exclude=exclude,
+        )
 
-    print(f"int8 parity (max prob diff vs fp32): {diff:.4f}", flush=True)
-    if diff > 0.10:
-        print("WARNING: int8 parity above 0.10 - shipping the fp32 model instead")
+    def q_fp16() -> None:
+        _convert_fp16(fp32, int8)
+
+    # strategy ladder: ship the smallest artifact whose parity passes.
+    # fp16 (2x size) is the reliable fallback when int8 drifts too far.
+    strategies = [
+        ("int8 per-channel (118 MB class)", q_int8),
+        ("int8 per-channel, classifier excluded (118 MB class)", q_int8_no_classifier),
+        ("fp16 (235 MB class)", q_fp16),
+    ]
+    chosen = None
+    for name, fn in strategies:
+        print(f"quantization strategy: {name}", flush=True)
+        fn()
+        diff = _max_prob_diff(fp32, int8, tokenizer)
+        print(f"  parity (max prob diff): {diff:.4f}", flush=True)
+        if diff <= 0.10:
+            chosen = name
+            break
+        print(f"  {name} drifted too far - trying next strategy", flush=True)
+
+    if chosen is None:
+        print("WARNING: all strategies failed parity - shipping the fp32 model instead")
         shutil.copy2(fp32, int8)
+        chosen = "fp32 (470 MB class)"
 
+    print(f"shipped: {chosen}", flush=True)
     print(
         f"fp32: {fp32.stat().st_size / 1e6:.1f} MB, "
-        f"int8: {int8.stat().st_size / 1e6:.1f} MB"
+        f"artifact: {int8.stat().st_size / 1e6:.1f} MB"
     )
     return int8
 
