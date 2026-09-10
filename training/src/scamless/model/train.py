@@ -43,10 +43,13 @@ class MultiLabelDataset(Dataset):
     longest item in each batch.
     """
 
-    def __init__(self, texts, label_vectors, tokenizer, max_len, span_masks=None):
-        self.enc = tokenizer(
-            list(texts), truncation=True, max_length=max_len, add_special_tokens=True
-        )
+    def __init__(self, texts, label_vectors, tokenizer, max_len, span_masks=None, enc_view=None):
+        if enc_view is not None:
+            self.enc = enc_view
+        else:
+            self.enc = tokenizer(
+                list(texts), truncation=True, max_length=max_len, add_special_tokens=True
+            )
         self.labels = label_vectors
         self.pad_token_id = tokenizer.pad_token_id
         # span_masks[i][j] = -100 (ignore) or a TACTIC_TAGS index per token.
@@ -183,7 +186,28 @@ def build_dataset(df, tokenizer, cfg, adversarial_rate: float) -> MultiLabelData
         span_masks = build_span_masks(unaugmented_texts, span_records, tokenizer, cfg.max_len)
         print(f"span annotations loaded from {cfg.spans_file}")
 
-    return MultiLabelDataset(texts, vectors, tokenizer, cfg.max_len, span_masks=span_masks)
+    # chunked tokenization: one giant call on 200k+ texts peaks at ~2GB
+    # (rust encodings + python copies alive together) and trips the Colab
+    # OOM killer; chunks bound the peak to a few hundred MB. Verified
+    # locally: identical output, 213k texts in ~105s.
+    all_input_ids: list = []
+    all_attention: list = []
+    CHUNK = 5000
+    for i in range(0, len(texts), CHUNK):
+        enc = tokenizer(
+            texts[i : i + CHUNK], truncation=True, max_length=cfg.max_len, add_special_tokens=True
+        )
+        all_input_ids.extend(enc["input_ids"])
+        all_attention.extend(enc["attention_mask"])
+        if (i // CHUNK) % 10 == 0 and i:
+            print(f"  tokenized {i + CHUNK}/{len(texts)}", flush=True)
+
+    # plain dict: must be picklable for DataLoader worker processes
+    enc_view = {"input_ids": all_input_ids, "attention_mask": all_attention}
+
+    return MultiLabelDataset(
+        texts, vectors, tokenizer, cfg.max_len, span_masks=span_masks, enc_view=enc_view
+    )
 
 
 def set_seed(seed: int) -> None:
@@ -317,6 +341,16 @@ def train_model(train_df, val_df, cfg):
     )
     print("stage: trainer ready - starting training", flush=True)
 
+    # capture what validation needs, then free the DataFrames: on a 224k-row
+    # corpus they hold hundreds of MB the GPU run no longer needs
+    val_truth = np.array(
+        [labels_schema.labels_to_vector(list(names)) for names in val_df["labels"].tolist()]
+    )
+    import gc
+
+    del train_df, val_df
+    gc.collect()
+
     # OOM failsafe: halve the batch and retry once instead of dying
     attempts = 0
     while True:
@@ -356,7 +390,7 @@ def train_model(train_df, val_df, cfg):
                 print(f"  validation {min(i + eval_bs, len(val_ds))}/{len(val_ds)}", flush=True)
         probs = torch.sigmoid(torch.cat(logits)).cpu().numpy()
     preds = (probs > 0.5).astype(int)
-    truth = np.array([labels_schema.labels_to_vector(list(r["labels"])) for _, r in val_df.iterrows()])
+    truth = val_truth
     # macro-F1 over supported labels only (same definition as the eval harness)
     support = truth.sum(axis=0) > 0
     val_f1 = float(f1_score(truth, preds, average="macro", zero_division=0))
