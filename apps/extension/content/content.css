@@ -1,0 +1,16 @@
+.scamless-check-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 999;
+  border: 1px solid #232d3a;
+  border-radius: 6px;
+  background: #11161d;
+  color: #4ea1ff;
+  font: 600 11px/1.4 system-ui, sans-serif;
+  padding: 3px 8px;
+  cursor: pointer;
+  opacity: 0.85;
+}
+.scamless-check-btn:hover { opacity: 1; }
+.scamless-check-btn:disabled { opacity: 0.5; cursor: wait; }

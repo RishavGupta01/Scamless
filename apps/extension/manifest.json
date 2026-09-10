@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Scamless",
+  "version": "0.1.0",
+  "description": "On-device scam detection for the web. Private, offline after setup, no telemetry.",
+  "permissions": ["offscreen", "contextMenus", "storage", "unlimitedStorage"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup/popup.html", "default_title": "Scamless" },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://mail.google.com/*",
+        "https://outlook.live.com/*",
+        "https://outlook.office.com/*",
+        "https://web.whatsapp.com/*"
+      ],
+      "js": ["content/content.js"],
+      "css": ["content/content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "host_permissions": [
+    "https://huggingface.co/*",
+    "https://cdn.jsdelivr.net/*"
+  ]
+}

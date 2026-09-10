@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      width: 340px; margin: 0; padding: 14px;
+      background: #0b0f14; color: #e6edf3;
+      font: 14px/1.5 system-ui, sans-serif;
+    }
+    .brand { font-weight: 800; letter-spacing: .12em; font-size: 15px; }
+    .brand span { color: #4ea1ff; }
+    .hint { color: #8b98a5; font-size: 12px; margin: 4px 0 12px; }
+    textarea {
+      width: 100%; box-sizing: border-box; min-height: 90px; resize: vertical;
+      background: #11161d; color: #e6edf3; border: 1px solid #232d3a;
+      border-radius: 8px; padding: 10px; font: inherit;
+    }
+    textarea:focus { outline: 2px solid #4ea1ff; outline-offset: 1px; }
+    .row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+    button {
+      border: 1px solid #232d3a; border-radius: 8px; padding: 8px 14px;
+      background: #161d26; color: #e6edf3; font: 600 13px system-ui; cursor: pointer;
+    }
+    button.primary { background: #4ea1ff; border-color: #4ea1ff; color: #06121f; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .band { font-weight: 800; font-size: 15px; margin-top: 12px; }
+    .safe { color: #3ddc84; } .susp { color: #ffb84d; } .danger { color: #ff5c5c; }
+    .hit { display: flex; justify-content: space-between; margin-top: 4px; }
+    .hit .prob { color: #4ea1ff; }
+    .hit .weak-label { color: #8b98a5; }
+    .slider-row { margin-top: 14px; }
+    .slider-row label { font-size: 12px; color: #8b98a5; display: block; margin-bottom: 4px; }
+    input[type="range"] { width: 100%; }
+    .footer { margin-top: 14px; color: #8b98a5; font-size: 11px; }
+    a { color: #4ea1ff; }
+  </style>
+</head>
+<body>
+  <div class="brand">SCAM<span>LESS</span></div>
+  <div class="hint">Paste any message. Detection runs on your device.</div>
+
+  <textarea id="input" placeholder="Paste the suspicious message here..."></textarea>
+  <div class="row">
+    <button id="scan" class="primary">Scan</button>
+    <button id="wrong" title="Save this verdict as a local correction - it improves future training data">This was wrong</button>
+    <span id="status"></span>
+  </div>
+
+  <div id="result" hidden>
+    <div id="band" class="band"></div>
+    <div id="hits"></div>
+  </div>
+
+  <div class="slider-row">
+    <label for="sensitivity">Sensitivity: <span id="sens-value">balanced</span> (higher = stricter)</label>
+    <input id="sensitivity" type="range" min="0" max="100" value="0" />
+  </div>
+
+  <div class="footer">
+    Corrections are stored locally only and never uploaded. <a href="#" id="export">Export corrections</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
