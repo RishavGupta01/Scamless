@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scamless - privacy</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">SCAM<span>LESS</span></a>
+    <nav>
+      <a href="index.html">Scan</a>
+      <a href="learn.html">Learn</a>
+      <a href="privacy.html" aria-current="page">Privacy</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero reveal">
+      <h1>Privacy<span class="accent">.</span></h1>
+      <p class="sub">The entire product is built so there is almost nothing to disclose. This page states it precisely.</p>
+    </section>
+
+    <div class="why-panel reveal">
+      <h2>What leaves your device</h2>
+      <p>Nothing you scan. Every message, URL and file you check is processed
+      inside your own browser or the extension's offscreen document. There is
+      no Scamless server, no analytics service, no logging, no account.</p>
+    </div>
+
+    <div class="why-panel reveal">
+      <h2>What is downloaded</h2>
+      <p>Exactly once, the detection model (~118 MB) is downloaded from the
+      Hugging Face Hub and cached on your device. After that the product works
+      fully offline. Model files contain no personal data.</p>
+    </div>
+
+    <div class="why-panel reveal">
+      <h2>What is stored locally</h2>
+      <p>Your scan history (last 50 scans) and any "this was wrong"
+      corrections live in your browser's local storage. They never leave your
+      device unless you personally export them using the export button, and
+      even then the upload destination is entirely your choice.</p>
+    </div>
+
+    <div class="why-panel reveal">
+      <h2>Permissions used (extension)</h2>
+      <p><strong>contextMenus / scripting / activeTab</strong> - to check
+      text you explicitly select or press the button for. <strong>storage /
+      unlimitedStorage</strong> - to cache the model and your local history.
+      <strong>offscreen</strong> - to run the model in a hidden page. No
+      permission reads your data in the background.</p>
+    </div>
+
+    <div class="why-panel reveal">
+      <h2>Open source</h2>
+      <p>The full source code is public at
+      <a href="https://github.com/RishavGupta01/Scamless">github.com/RishavGupta01/Scamless</a>.
+      Anyone can verify every claim on this page.</p>
+    </div>
+  </main>
+
+  <footer class="footer"><p>Questions: open an issue on the repository.</p></footer>
+</body>
+</html>

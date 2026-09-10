@@ -1,0 +1,66 @@
+Scamless
+Copyright 2026 Rishav Gupta
+
+This product includes software and data developed by Rishav Gupta
+(https://github.com/RishavGupta01/Scamless), licensed under the Apache
+License, Version 2.0.
+
+The name "Scamless", the brand mark and the visual identity are not licensed
+under the Apache License and may not be used to promote derived products
+without written permission.
+
+---------------------------------------------------------------------------
+
+THIRD-PARTY DATA SOURCES
+
+The detection model was trained on public corpora. Each source retains its
+own license and terms. Datasets are used for model training only; none are
+redistributed inside this repository.
+
+  SMS Spam Collection (UCI)
+    Source: https://archive.ics.uci.edu/dataset/228/sms+spam+collection
+    Terms: free for research use with attribution.
+
+  SpamAssassin Public Corpus
+    Source: https://spamassassin.apache.org/old/publiccorpus/
+    Terms: provided for research by the Apache SpamAssassin project.
+
+  Enron spam corpus (SetFit/enron_spam on Hugging Face)
+    Source: https://huggingface.co/datasets/SetFit/enron_spam
+    Terms: Enron corpus is public record; redistribution per HF dataset card.
+
+  Phishing Email Dataset (ealvaradob/phishing-dataset)
+    Source: https://huggingface.co/datasets/ealvaradob/phishing-dataset
+    License: Apache-2.0.
+
+  SMS Spam Multilingual Collection (dbarbedillo)
+    Source: https://huggingface.co/datasets/dbarbedillo/SMS_Spam_Multilingual_Collection_Dataset
+    License: GPL-3.0 (data only; used for training, not redistributed).
+
+  Seven Phishing/Spam Email Datasets (puyang2025)
+    Source: https://huggingface.co/datasets/puyang2025/seven-phishing-email-datasets
+    Terms: aggregated corpus; see upstream sources (TREC-05/06/07, CEAS-08,
+    Enron, Ling, SpamAssassin) for original terms.
+
+  PhishingEmailDetectionv2.0 (cybersectony)
+    Source: https://huggingface.co/datasets/cybersectony/PhishingEmailDetectionv2.0
+    Terms: public dataset; see HF card.
+
+  OpenPhish community feed
+    Source: https://openphish.com/
+    Terms: free community feed; check current terms before commercial use.
+
+  Majestic Million
+    Source: https://majestic.com/reports/majestic-million
+    Terms: free download with attribution; see majestic.com terms.
+
+---------------------------------------------------------------------------
+
+THIRD-PARTY LIBRARIES
+
+  PyTorch, Hugging Face transformers/datasets/hub, onnxruntime, pandas,
+  scikit-learn - each under its own permissive license (BSD/Apache/MIT).
+  transformers.js (Apache-2.0) and three.js (MIT) power the browser runtime.
+
+If you are a rights holder and believe a source is misattributed, open an
+issue on the repository and it will be corrected promptly.
