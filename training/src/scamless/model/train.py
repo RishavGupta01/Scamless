@@ -11,6 +11,12 @@ Both losses are computed in one backward pass, so a future run that has span
 annotations trains both skills simultaneously with zero architecture changes.
 """
 
+import os
+
+# fast tokenizers fork one worker per core on big corpora: on Colab that
+# forks 48+ processes and can trip the OOM killer with zero traceback
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 import pathlib
 import random
 
@@ -151,9 +157,12 @@ class MultiTaskTrainer(Trainer):
 def build_dataset(df, tokenizer, cfg, adversarial_rate: float) -> MultiLabelDataset:
     texts, vectors, augmented = [], [], []
     rng = random.Random(cfg.seed)
-    for _, row in df.iterrows():
-        text = str(row["text"])
-        labels = list(row["labels"])
+    # .tolist() avoids pandas iterrows (Series-per-row churn: minutes + RAM on 200k+ rows)
+    all_texts = df["text"].tolist()
+    all_labels = df["labels"].tolist()
+    for text, labels in zip(all_texts, all_labels):
+        text = str(text)
+        labels = list(labels)
         is_aug = bool(labels) and adversarial_rate > 0 and rng.random() < adversarial_rate
         if is_aug:
             text = apply_all(text, rng)
@@ -288,20 +297,25 @@ def train_model(train_df, val_df, cfg):
     )
 
     set_seed(cfg.seed)
+    print("stage: loading tokenizer + model", flush=True)
     tokenizer = AutoTokenizer.from_pretrained(cfg.backbone)
     model = load_model(cfg)
 
+    print("stage: tokenizing train set (224k rows, ~2 min)...", flush=True)
     train_ds = build_dataset(train_df, tokenizer, cfg, cfg.adversarial_rate)
+    print("stage: tokenizing val set...", flush=True)
     val_ds = build_dataset(val_df, tokenizer, cfg, adversarial_rate=0.0)
+    print("stage: datasets ready", flush=True)
 
     # pos_weight: inverse frequency per label, capped to keep loss stable
     vecs = np.array(
-        [labels_schema.labels_to_vector(list(r["labels"])) for _, r in train_df.iterrows()]
+        [labels_schema.labels_to_vector(list(names)) for names in train_df["labels"].tolist()]
     )
     pos = vecs.sum(axis=0)
     pos_weight = torch.tensor(
         np.clip((len(vecs) - pos) / np.maximum(pos, 1.0), 1.0, 10.0), dtype=torch.float
     )
+    print("stage: trainer ready - starting training", flush=True)
 
     # OOM failsafe: halve the batch and retry once instead of dying
     attempts = 0
