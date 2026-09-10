@@ -54,11 +54,16 @@ def truth_matrix(df) -> np.ndarray:
     return np.array([labels_to_vector(list(r)) for r in df["labels"]])
 
 
-def tune_thresholds(probs, truth, sweep=None) -> dict:
-    """Per-label F1-optimal thresholds from validation probabilities.
+def tune_thresholds(
+    probs, truth, sweep=None, precision_floor: float = 0.90
+) -> dict:
+    """Per-label thresholds: best F1 subject to a precision floor.
 
-    0.5 is an arbitrary default for independent sigmoids; class imbalance and
-    pos_weight capping shift every label's optimum. Returns {label: threshold}.
+    Pure F1-maximization allowed the phishing head to fire at precision 0.31
+    (the 54% FP disaster). This tuner first looks for the F1-best threshold
+    among candidates whose precision meets the floor; if none qualify, it
+    falls back to the highest-precision threshold with nonzero F1.
+    Returns {label: threshold}.
     """
     if sweep is None:
         sweep = np.arange(0.05, 0.96, 0.05)
@@ -69,11 +74,18 @@ def tune_thresholds(probs, truth, sweep=None) -> dict:
         if truth[:, j].sum() == 0:
             thresholds[name] = 0.5
             continue
-        scores = [
-            precision_recall_fscore_support(
-                truth[:, j], (probs[:, j] > t).astype(int), average="binary", zero_division=0
-            )[2]
-            for t in sweep
-        ]
-        thresholds[name] = float(sweep[int(np.argmax(scores))])
+        table = []
+        for t in sweep:
+            pred = (probs[:, j] > t).astype(int)
+            p, _r, f1, _ = precision_recall_fscore_support(
+                truth[:, j], pred, average="binary", zero_division=0
+            )
+            table.append((float(t), float(f1), float(p)))
+        eligible = [row for row in table if row[2] >= precision_floor]
+        if eligible:
+            best = max(eligible, key=lambda row: row[1])
+        else:
+            nonzero = [row for row in table if row[1] > 0]
+            best = max(nonzero, key=lambda row: row[2]) if nonzero else (0.5, 0.0, 0.0)
+        thresholds[name] = best[0]
     return thresholds

@@ -112,7 +112,12 @@ def main() -> None:
             cache.parent.mkdir(parents=True, exist_ok=True)
             np.save(cache, val_probs)
         val_truth = _truth(val_df)
-        thresholds = tune_thresholds(val_probs, val_truth)
+        from scamless.eval.gate import load_config
+
+        eval_cfg = load_config(pathlib.Path(__file__).parent / "eval_config.json")
+        thresholds = tune_thresholds(
+            val_probs, val_truth, precision_floor=eval_cfg.get("precision_floor", 0.90)
+        )
         threshold_path = pathlib.Path(args.model_dir) / "onnx" / "thresholds.json"
         threshold_path.write_text(json.dumps(thresholds, indent=2))
         val_preds = probs_to_labels(val_probs, thresholds)

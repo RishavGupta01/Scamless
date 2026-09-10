@@ -1,5 +1,6 @@
 {
   "macro_f1_min": 0.85,
   "fp_rate_max": 0.02,
-  "notes": "v1 gates. Spec section 7 targets (0.95 / 0.01) are the post-multilingual-phase goals; these gates tighten as data improves."
+  "precision_floor": 0.90,
+  "notes": "v1 gates. Threshold tuning keeps each label's precision at or above precision_floor when possible, then maximizes F1. Spec section 7 targets (0.95 / 0.01) are the post-multilingual-phase goals; these gates tighten as data improves."
 }
