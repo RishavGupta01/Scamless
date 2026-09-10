@@ -25,19 +25,28 @@ _REPLY_SEP_RE = re.compile(r"\n-{3,}\s*(reply|forwarded|forward message)", re.IG
 
 
 def clean_text(text: str) -> str:
-    text = html.unescape(str(text or ""))
-    text = _TAG_RE.sub(" ", text)
+    text = str(text or "")
+    # fast-path guards: skip regex machinery entirely for texts that cannot
+    # contain the patterns (dominant cost when cleaning 600k+ rows)
+    if "&" in text:
+        text = html.unescape(text)
+    if "<" in text:
+        text = _TAG_RE.sub(" ", text)
 
+    low = text.lower()
     cut = None
-    m = _ORIG_RE.search(text)
-    if m:
-        cut = m.start()
-    m2 = _WROTE_RE.search(text)
-    if m2 and (cut is None or m2.start() < cut):
-        cut = m2.start()
-    m3 = _REPLY_SEP_RE.search(text)
-    if m3 and (cut is None or m3.start() < cut):
-        cut = m3.start()
+    if "original message" in low:
+        m = _ORIG_RE.search(text)
+        if m:
+            cut = m.start()
+    if "wrote:" in low:
+        m2 = _WROTE_RE.search(text)
+        if m2 and (cut is None or m2.start() < cut):
+            cut = m2.start()
+    if ("reply" in low or "forwarded" in low or "forward message" in low) and "\n-" in text:
+        m3 = _REPLY_SEP_RE.search(text)
+        if m3 and (cut is None or m3.start() < cut):
+            cut = m3.start()
     if cut is not None and cut >= MIN_CHARS:
         text = text[:cut]
 

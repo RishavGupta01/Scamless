@@ -1,13 +1,15 @@
 """Download all raw corpora into training/data/raw/. Run once; idempotent.
 
-Fault isolation: one corpus failing does not abort the others; a summary
-reports what failed so the build step can degrade gracefully and a re-run
-retries only the missing pieces.
+Fault isolation: one corpus failing does not abort the others. Downloads run
+in parallel threads (each with its own session, so thread safety is by
+construction) and a summary reports what failed so the build step can
+degrade gracefully; a re-run retries only the missing pieces.
 
 Usage: python -m scamless.data.fetch_all
 """
 
 import pathlib
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
@@ -30,60 +32,60 @@ SEVEN_PHISHING_FILE = "train.parquet"
 
 
 def run() -> None:
-    session = requests.Session()
-    session.headers["User-Agent"] = "scamless-training/0.1"
-
     failures: list[str] = []
 
-    def guarded(name: str, fn) -> None:
+    def job(name: str, fn) -> None:
         try:
-            fn()
+            session = requests.Session()
+            session.headers["User-Agent"] = "scamless-training/0.1"
+            fn(session)
         except Exception as exc:  # noqa: BLE001 - isolation is the point
             failures.append(f"{name}: {exc}")
             print(f"FETCH FAILED ({name}): {exc}", flush=True)
 
-    def _sms() -> None:
+    def _sms(session) -> None:
         sms_zip = fetch(SMS_ZIP, RAW / "sms" / "sms.zip", session)
         extract_archive(sms_zip, RAW / "sms")
 
-    def _spamassassin() -> None:
+    def _spamassassin(session) -> None:
         for name, url in SPAMASSASSIN.items():
             tarball = fetch(url, RAW / "spamassassin" / f"{name}.tar.bz2", session)
             extract_archive(tarball, RAW / "spamassassin")
 
-    guarded("sms", _sms)
-    guarded("spamassassin", _spamassassin)
-    guarded("openphish", lambda: fetch(OPENPHISH, RAW / "urls" / "openphish.txt", session))
-    guarded(
-        "majestic",
-        lambda: fetch(MAJESTIC, RAW / "urls" / "majestic_million.csv", session),
-    )
-    guarded(
-        "hf_phishing_texts",
-        lambda: fetch(HF_PHISHING_TEXTS, RAW / "phishing_hf" / "texts.json", session),
-    )
-
-    def _seven_phishing() -> None:
+    def _seven_phishing(session) -> None:
         url = f"https://huggingface.co/datasets/{SEVEN_PHISHING}/resolve/main/{SEVEN_PHISHING_FILE}"
         fetch(url, RAW / "seven_phishing" / SEVEN_PHISHING_FILE, session)
 
-    guarded(
-        "multilingual_sms",
-        lambda: fetch(
-            f"https://huggingface.co/datasets/{MULTILINGUAL_SMS}/resolve/main/data-augmented.csv",
-            RAW / "multilingual_sms" / "data-augmented.csv",
-            session,
+    jobs = [
+        ("sms", _sms),
+        ("spamassassin", _spamassassin),
+        ("openphish", lambda s: fetch(OPENPHISH, RAW / "urls" / "openphish.txt", s)),
+        ("majestic", lambda s: fetch(MAJESTIC, RAW / "urls" / "majestic_million.csv", s)),
+        (
+            "hf_phishing_texts",
+            lambda s: fetch(HF_PHISHING_TEXTS, RAW / "phishing_hf" / "texts.json", s),
         ),
-    )
-    guarded(
-        "phishing_v2",
-        lambda: fetch(
-            f"https://huggingface.co/datasets/{PHISHING_V2}/resolve/main/{PHISHING_V2_FILE}",
-            RAW / "phishing_v2" / pathlib.Path(PHISHING_V2_FILE).name,
-            session,
+        (
+            "multilingual_sms",
+            lambda s: fetch(
+                f"https://huggingface.co/datasets/{MULTILINGUAL_SMS}/resolve/main/data-augmented.csv",
+                RAW / "multilingual_sms" / "data-augmented.csv",
+                s,
+            ),
         ),
-    )
-    guarded("seven_phishing", _seven_phishing)
+        (
+            "phishing_v2",
+            lambda s: fetch(
+                f"https://huggingface.co/datasets/{PHISHING_V2}/resolve/main/{PHISHING_V2_FILE}",
+                RAW / "phishing_v2" / pathlib.Path(PHISHING_V2_FILE).name,
+                s,
+            ),
+        ),
+        ("seven_phishing", _seven_phishing),
+    ]
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda j: job(j[0], j[1]), jobs))
 
     print(f"Raw corpora ready under {RAW}")
     if failures:
