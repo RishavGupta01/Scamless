@@ -19,6 +19,7 @@ from scamless.data import (
     seven_phishing,
     sms_spam,
     spamassassin,
+    synthetic_multilingual,
     urls,
 )
 from scamless.data.clean import clean_text
@@ -104,6 +105,10 @@ def collect_messages() -> list[dict]:
 
     if skipped:
         print(f"skipped {skipped} unreadable source files")
+
+    synthetic = synthetic_multilingual.generate_synthetic()
+    print(f"synthetic multilingual seed rows: {len(synthetic)}")
+    records.extend(synthetic)
     return records, extra_url_records
 
 
