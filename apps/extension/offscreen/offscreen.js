@@ -61,11 +61,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     try {
-      const enc = tokenizer(msg.text, { truncation: true, max_length: MAX_LEN });
-      const output = await model({
-        input_ids: [enc.input_ids],
-        attention_mask: [enc.attention_mask],
+      const enc = tokenizer(msg.text, {
+        truncation: true,
+        max_length: MAX_LEN,
+        return_tensor: true,
       });
+      const output = await model(enc);
       const probs = output.logits.tolist()[0].map(sigmoid);
 
       const { sensitivity = 0 } = await chrome.storage.sync.get({ sensitivity: 0 });

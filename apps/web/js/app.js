@@ -85,12 +85,14 @@ function enterDemoMode(reason) {
 function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
 
 async function scanWithModel(text) {
-  const enc = state.tokenizer(text, { truncation: true, max_length: CONFIG.MAX_LEN });
-  const output = await state.model({
-    input_ids: [enc.input_ids],
-    attention_mask: [enc.attention_mask],
+  const inputs = state.tokenizer(text, {
+    truncation: true,
+    max_length: CONFIG.MAX_LEN,
+    return_tensor: true,
   });
-  return output.logits.tolist()[0].map(sigmoid);
+  const output = await state.model(inputs);
+  const logits = output.logits.tolist()[0];
+  return logits.map(sigmoid);
 }
 
 function renderRisk(score) {
