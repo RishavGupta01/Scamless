@@ -13,6 +13,7 @@ import pandas as pd
 from scamless.data import (
     enron,
     multilingual_sms,
+    natural_seed,
     nazario,
     phishing_hf,
     phishing_v2,
@@ -109,6 +110,10 @@ def collect_messages() -> list[dict]:
     synthetic = synthetic_multilingual.generate_synthetic()
     print(f"synthetic multilingual seed rows: {len(synthetic)}")
     records.extend(synthetic)
+
+    natural = natural_seed.collect()
+    print(f"natural llm seed rows: {len(natural)}")
+    records.extend(natural)
     return records, extra_url_records
 
 
