@@ -58,6 +58,7 @@ async function loadModel() {
   state.model = await AutoModelForSequenceClassification.from_pretrained(CONFIG.MODEL_REPO, {
     progress_callback: progress,
     model_file_name: "model_int8",
+    dtype: "fp32", // artifact is fp32 content under the model_int8 name; don't let transformers.js append _quantized
   });
   state.thresholds = await loadThresholds();
   state.phase = "ready";

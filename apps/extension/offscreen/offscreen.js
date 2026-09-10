@@ -19,10 +19,11 @@ let modelFailed = false;
 async function ensureModel() {
   if (model || modelFailed) return;
   try {
-    tokenizer = await AutoTokenizer.from_pretrained(MODEL_REPO);
-    model = await AutoModelForSequenceClassification.from_pretrained(MODEL_REPO, {
-      model_file_name: "model_int8",
-    });
+  tokenizer = await AutoTokenizer.from_pretrained(MODEL_REPO);
+  model = await AutoModelForSequenceClassification.from_pretrained(MODEL_REPO, {
+    model_file_name: "model_int8",
+    dtype: "fp32",
+  });
     const res = await fetch(`https://huggingface.co/${MODEL_REPO}/resolve/main/thresholds.json`);
     if (!res.ok) throw new Error(`thresholds fetch failed: ${res.status}`);
     thresholds = await res.json();
