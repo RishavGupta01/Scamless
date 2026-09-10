@@ -81,14 +81,10 @@ async function loadModel() {
 }
 
 function enterDemoMode(reason) {
+  // rule engine is always the baseline; this just notes the model didn't load
   state.phase = "demo";
-  setStatus("Rule engine active - full model unavailable", "error");
-  $("load-detail").textContent =
-    `Full model could not load (${reason}). Scans use the built-in rule engine: ` +
-    "weighted pattern analysis + link/homoglyph/OTP signals.";
-  $("load-progress").hidden = true;
-  $("scan-btn").disabled = false;
-  renderSamples();
+  setStatus("Rule engine active (model unavailable)", "error");
+  $("load-detail").textContent = reason;
 }
 
 function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
@@ -351,10 +347,19 @@ async function boot() {
   });
 
   env.allowLocalModels = false;
+
+  // rule engine is available IMMEDIATELY - no blocking, no waiting
+  state.phase = "demo";
+  setStatus("Rule engine ready - model loading in background", "ready");
+  $("load-detail").textContent = "Scanning with pattern analysis. Trained model loading in background...";
+  $("scan-btn").disabled = false;
+  renderSamples();
+
+  // model downloads in background - when it arrives, future scans use it
   try {
     await loadModel();
-  } catch (err) {
-    enterDemoMode(err.message || "model repo unreachable");
+  } catch {
+    // model failed to load: rule engine continues working, status already set
   }
 }
 
