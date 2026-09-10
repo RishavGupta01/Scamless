@@ -3,9 +3,15 @@
   "name": "Scamless",
   "version": "0.1.0",
   "description": "On-device scam detection for the web. Private, offline after setup, no telemetry.",
-  "permissions": ["offscreen", "contextMenus", "storage", "unlimitedStorage"],
+  "permissions": ["offscreen", "contextMenus", "storage", "unlimitedStorage", "scripting", "activeTab"],
   "background": { "service_worker": "background.js" },
   "action": { "default_popup": "popup/popup.html", "default_title": "Scamless" },
+  "commands": {
+    "scan-selection": {
+      "suggested_key": { "default": "Ctrl+Shift+S" },
+      "description": "Check selected text for scams"
+    }
+  },
   "content_scripts": [
     {
       "matches": [

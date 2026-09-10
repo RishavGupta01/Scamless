@@ -98,9 +98,59 @@ function renderRisk(score) {
   const circumference = 2 * Math.PI * 52;
   arc.style.strokeDashoffset = String(circumference * (1 - score / 100));
   arc.style.stroke = band.color;
-  $("meter-score").textContent = String(score);
+  animateScore($("meter-score"), score);
   $("verdict-band").textContent = band.label;
   $("verdict-band").style.color = band.color;
+}
+
+function animateScore(el, target) {
+  const t0 = performance.now();
+  const dur = 900;
+  function step(now) {
+    const t = Math.min(1, (now - t0) / dur);
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = String(Math.round(target * eased));
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+// tactic span highlighting: mark urgency language, links, codes and amounts
+// directly inside the scanned message (rule-based, deterministic)
+const TACTIC_PATTERNS = [
+  { cls: "link", re: /\b(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi },
+  { cls: "otp", re: /\b\d{4,8}\b/g },
+  { cls: "money", re: /(?:rs\.?\s?|inr\s?|\$|€|£|₹)\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:k|lakh|crore|million))?|\b\d[\d,]+\s?(?:rupees|dollars|euros)\b/gi },
+  { cls: "urgency", re: /\b(?:urgent(?:ly)?|immediately|final warning|last chance|act now|suspended|deactivated|legal action|arrest(?:ed)?|digital arrest|virtual custody|expire[sd]?|perm(?:anently)?antly?)\b/gi },
+];
+
+function annotate(text) {
+  const ranges = [];
+  for (const { cls, re } of TACTIC_PATTERNS) {
+    re.lastIndex = 0;
+    for (const m of text.matchAll(re)) {
+      ranges.push({ start: m.index, end: m.index + m[0].length, cls, text: m[0] });
+    }
+  }
+  ranges.sort((a, b) => a.start - b.start || b.end - a.start);
+  const picked = [];
+  let lastEnd = -1;
+  for (const r of ranges) {
+    if (r.start >= lastEnd) { picked.push(r); lastEnd = r.end; }
+  }
+
+  const host = $("annotated-text");
+  host.textContent = "";
+  let cursor = 0;
+  for (const r of picked) {
+    if (r.start > cursor) host.appendChild(document.createTextNode(text.slice(cursor, r.start)));
+    const mark = document.createElement("mark");
+    mark.className = r.cls;
+    mark.textContent = r.text;
+    host.appendChild(mark);
+    cursor = r.end;
+  }
+  if (cursor < text.length) host.appendChild(document.createTextNode(text.slice(cursor)));
 }
 
 function renderLabels(hits) {
@@ -185,11 +235,17 @@ function computeHits(modelProbs, labelNames) {
   return { hits, weak };
 }
 
-function renderScan(hits, weak, signals, score, engineTag) {
+function renderScan(hits, weak, signals, score, engineTag, text) {
   renderRisk(score);
   renderLabels(hits);
   renderWhy(hits, weak, signals);
   renderPlaybook(hits);
+  if (text) {
+    annotate(text);
+    $("annotated-panel").hidden = false;
+  } else {
+    $("annotated-panel").hidden = true;
+  }
   $("result").hidden = false;
   const tag = $("engine-tag");
   tag.hidden = false;
@@ -213,11 +269,11 @@ function onScan() {
       const names = labelNames.length ? labelNames : probs.map((_, i) => `label_${i}`);
       const modelHits = computeHits(probs, names);
       const fused = fuse(probs, names, text, state.thresholds);
-      renderScan(fused.hits, fused.weak, fused.signals, fused.score, `full model - ran locally (${state.accelerated})`);
+      renderScan(fused.hits, fused.weak, fused.signals, fused.score, `full model - ran locally (${state.accelerated})`, text);
     })();
   } else if (state.phase === "demo") {
     const hits = heuristic_scan(text).sort((a, b) => b.prob - a.prob);
-    renderScan(hits, [], [], hits[0] ? Math.round(hits[0].prob * 100) : 0, "demo keyword rules - not the trained model");
+    renderScan(hits, [], [], hits[0] ? Math.round(hits[0].prob * 100) : 0, "demo keyword rules - not the trained model", text);
   }
 }
 

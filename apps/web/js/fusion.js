@@ -35,9 +35,13 @@ const HOMOGLYPH_SET = new Set([
 
 const URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi;
 const BARE_DOMAIN_RE =
-  /\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|net|org|info|xyz|top|online|site|icu|club|in|co|io|ru|cn|buzz|cfd|monster)\b/gi;
+  /\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|net|org|info|xyz|top|online|site|icu|in|co|io|ru|cn|buzz|cfd|monster)\b/gi;
 const OTP_RE = /\b(?:otp|one[\s-]?time (?:password|code)|verification code|pin)\b[^.]{0,40}?\b(\d{4,8})\b|\b(\d{4,8})\b[^.]{0,40}\b(?:otp|verification code)\b/i;
 const URGENCY_RE = /\b(?:urgent|immediately|final warning|last chance|act now|within \d+ (?:hours|hours|minutes)|suspended|deactivated|legal action|arrest)\b/gi;
+const DIGITAL_ARREST_RE = /\b(?:digital arrest|virtual custody|video call (?:with )?(?:police|officer|constable)|skype (?:hearing|investigation)|cbi (?:officer|case)|cyber (?:cell|police) (?:case|notice))\b/i;
+const UPI_REVERSAL_RE = /\b(?:enter|put|dial)\b[^.]{0,30}\b(?:upi )?pin\b[^.]{0,40}\b(?:receive|refund|get)\b|\b(?:receive|refund)\b[^.]{0,30}\b(?:upi )?pin\b/i;
+const PRIZE_FEE_RE = /\b(?:won|winner|prize|lottery|lucky draw)\b/i;
+const FEE_RE = /\b(?:fee|charge|gst|customs|processing|registration|deposit)\b/i;
 
 const SIGNAL_WEIGHTS = {
   homoglyph: 25,
@@ -51,6 +55,10 @@ const SIGNAL_WEIGHTS = {
   otp_pattern: 15,
   urgency_language: 8,
   pii_request: 5,
+  digital_arrest: 20,
+  upi_pin_reversal: 18,
+  prize_fee_combo: 15,
+  kyc_link: 12,
 };
 
 function extractUrls(text) {
@@ -157,7 +165,41 @@ export function analyzeText(text) {
     );
   }
 
-  // 4. urgency language
+  // 4. digital arrest / virtual police custody (the dominant Indian scam pattern)
+  if (DIGITAL_ARREST_RE.test(text)) {
+    addBoost(
+      { id: "digital_arrest", detail: "Claims of virtual police custody or remote arrest - real law enforcement never operates this way" },
+      "gov_bank_impersonation", "payment_pressure"
+    );
+  }
+
+  // 5. UPI PIN reversal scam ("enter PIN to RECEIVE money")
+  if (UPI_REVERSAL_RE.test(text)) {
+    addBoost(
+      { id: "upi_pin_reversal", detail: "Asks for your UPI PIN in a money-RECEIVING context - entering a PIN always SENDS money" },
+      "otp_request", "payment_pressure"
+    );
+  }
+
+  // 6. prize + fee combination (the single strongest lottery-scam tell)
+  const isPrize = PRIZE_FEE_RE.test(text);
+  const isFee = FEE_RE.test(text);
+  if (isPrize && isFee) {
+    addBoost(
+      { id: "prize_fee_combo", detail: "A prize or win combined with a fee or charge - real prizes never cost money to claim" },
+      "lottery_prize", "advance_fee"
+    );
+  }
+
+  // 7. KYC urgency paired with a link
+  if (/\bkyc\b/i.test(text) && urls.length > 0) {
+    addBoost(
+      { id: "kyc_link", detail: "KYC update pushed through a non-official link" },
+      "gov_bank_impersonation", "phishing"
+    );
+  }
+
+  // 8. urgency language
   const urgencyHits = text.match(URGENCY_RE) || [];
   if (urgencyHits.length >= 1) {
     addBoost(
