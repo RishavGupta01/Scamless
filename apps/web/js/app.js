@@ -1,9 +1,13 @@
-// Scamless web app: on-device inference via transformers.js (ONNX Runtime Web).
-// Flow: load thresholds -> load model (progress shown) -> scan -> sigmoid probs
-// -> fusion (model + rule signals) -> risk score -> verdict + why panel.
+// Scamless web app - bulletproof boot sequence.
+//
+// Architecture:
+// 1. Rule engine is available IMMEDIATELY (zero dependencies)
+// 2. transformers.js loads dynamically (non-blocking) for model inference
+// 3. If transformers.js or the model fails, rule engine continues working
+//
+// No static imports of remote modules. No blocking initialization.
+// The site is never useless.
 
-import { AutoTokenizer, AutoModelForSequenceClassification, env } from
-  "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.1";
 import { CONFIG } from "./config.js";
 import { CATEGORIES, riskBand } from "./categories.js";
 import { rule_scan } from "./heuristic.js";
@@ -12,12 +16,27 @@ import { fuse } from "./fusion.js";
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  phase: "idle",
+  phase: "demo", // starts as demo: rule engine works without any model
   tokenizer: null,
   model: null,
   thresholds: null,
   accelerated: "WASM",
 };
+
+// ---------------------------------------------------------------------------
+// model loading (background, non-blocking)
+// ---------------------------------------------------------------------------
+
+let transformersModule = null;
+
+async function loadTransformers() {
+  if (!transformersModule) {
+    transformersModule = await import(
+      "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.1"
+    );
+  }
+  return transformersModule;
+}
 
 function wireProgress(callback) {
   const perFile = new Map();
@@ -31,11 +50,6 @@ function wireProgress(callback) {
   };
 }
 
-function setStatus(text, cls) {
-  $("status-text").textContent = text;
-  $("status-dot").className = "dot" + (cls ? " " + cls : "");
-}
-
 async function loadThresholds() {
   const url = `https://huggingface.co/${CONFIG.MODEL_REPO}/resolve/main/thresholds.json`;
   const res = await fetch(url);
@@ -44,6 +58,8 @@ async function loadThresholds() {
 }
 
 async function loadModel() {
+  const { AutoTokenizer, AutoModelForSequenceClassification } = await loadTransformers();
+
   setStatus("Downloading detection model (one time, cached after this)");
   const progress = wireProgress((loaded, total) => {
     const mb = (loaded / 1e6).toFixed(0);
@@ -51,10 +67,10 @@ async function loadModel() {
     const pct = total ? Math.round((loaded / total) * 100) : 0;
     $("load-progress").hidden = false;
     $("load-bar").style.width = pct + "%";
-    $("load-detail").textContent = `${mb} / ${totalMb} MB - runs locally after this, never downloads again`;
+    $("load-detail").textContent = `${mb} / ${totalMb} MB - runs locally after this`;
   });
 
-  // if the download takes > 8 minutes, abort and fall back to the rule engine
+  // if the download takes > 8 minutes, abort
   const timeout = new Promise((_, reject) =>
     setTimeout(() => reject(new Error("model download timed out after 8 minutes")), 8 * 60 * 1000)
   );
@@ -76,16 +92,11 @@ async function loadModel() {
   setStatus(`Model ready - running locally (${state.accelerated})`, "ready");
   $("load-progress").hidden = true;
   $("load-detail").textContent = "Inference happens inside this browser tab. Scan away.";
-  $("scan-btn").disabled = false;
-  renderSamples();
 }
 
-function enterDemoMode(reason) {
-  // rule engine is always the baseline; this just notes the model didn't load
-  state.phase = "demo";
-  setStatus("Rule engine active (model unavailable)", "error");
-  $("load-detail").textContent = reason;
-}
+// ---------------------------------------------------------------------------
+// inference
+// ---------------------------------------------------------------------------
 
 function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
 
@@ -98,6 +109,15 @@ async function scanWithModel(text) {
   const output = await state.model(inputs);
   const logits = output.logits.tolist()[0];
   return logits.map(sigmoid);
+}
+
+// ---------------------------------------------------------------------------
+// rendering
+// ---------------------------------------------------------------------------
+
+function setStatus(text, cls) {
+  $("status-text").textContent = text;
+  $("status-dot").className = "dot" + (cls ? " " + cls : "");
 }
 
 function renderRisk(score) {
@@ -171,7 +191,7 @@ function renderLabels(hits, weak) {
       CATEGORIES[h.label].name + (h.engine === "rules" ? " (link analysis)" : "")
     ).join(" + ");
   } else if (weak.length) {
-    list.textContent = "Weak signals: " + weak.map((w) => CATEGORIES[w.label].name).join(", ") + " - below alert threshold";
+    list.textContent = "Weak signals detected - below alert threshold";
   } else {
     list.textContent = "No scam indicators detected.";
   }
@@ -195,17 +215,18 @@ function whyRow(head, prob, body, cls) {
   return li;
 }
 
+let _signals = [];
+
 function renderWhy(all) {
   const list = $("why-list");
   list.textContent = "";
 
-  // show labels sorted by fused probability, filtering noise below 5%
   const relevant = all
-    .filter((r) => r.fused >= 0.05)
-    .sort((a, b) => b.fused - a.fused)
+    .filter((r) => (r.fused ?? r.prob) >= 0.05)
+    .sort((a, b) => (b.fused ?? b.prob) - (a.fused ?? a.prob))
     .slice(0, 8);
 
-  if (!relevant.length) {
+  if (!relevant.length && !_signals.length) {
     const li = document.createElement("li");
     li.textContent = "No scam indicators found in this text.";
     list.appendChild(li);
@@ -213,18 +234,16 @@ function renderWhy(all) {
   }
 
   for (const r of relevant) {
-    const isHit = r.fused >= r.threshold;
+    const isHit = r.fused !== undefined && r.fused >= (r.threshold || 0.5);
     const head = (isHit ? "" : "Possible ") + CATEGORIES[r.label].name;
-    const blurb = CATEGORIES[r.label].blurb;
-    list.appendChild(whyRow(head, r.fused, blurb, isHit ? "" : "weak"));
+    const prob = r.fused ?? r.prob;
+    list.appendChild(whyRow(head, prob, CATEGORIES[r.label].blurb, isHit ? "" : "weak"));
   }
 
-  for (const s of analysis_signals) {
+  for (const s of _signals) {
     list.appendChild(whyRow("Signal: " + s.id.replace(/_/g, " "), null, s.detail, "weak"));
   }
 }
-
-let analysis_signals = [];
 
 function renderPlaybook(hits) {
   const panel = $("playbook");
@@ -236,19 +255,16 @@ function renderPlaybook(hits) {
 
 function renderScan(all, score, engineTag, text) {
   renderRisk(score);
-  renderLabels(all.filter((r) => r.fused >= r.threshold));
+  const hits = all.filter((r) => r.fused !== undefined && r.fused >= (r.threshold || 0.5));
+  renderLabels(hits, all.filter((r) => !hits.includes(r)));
   renderWhy(all);
-  renderPlaybook(all.filter((r) => r.fused >= r.threshold));
-  if (all.some((r) => r.fused >= r.threshold)) {
-    annotate(text, all.filter((r) => r.fused >= r.threshold));
-  } else {
-    $("annotated-panel").hidden = true;
-  }
+  renderPlaybook(hits);
+  annotate(text, hits);
   $("result").hidden = false;
   const tag = $("engine-tag");
   tag.hidden = false;
   tag.textContent = engineTag;
-  saveHistory({ score, engine: engineTag, at: new Date().toISOString() });
+  saveHistory({ score, hits: hits.map((h) => h.label), engine: engineTag, at: new Date().toISOString() });
 }
 
 function saveHistory(entry) {
@@ -257,62 +273,56 @@ function saveHistory(entry) {
     const history = JSON.parse(localStorage.getItem(key) || "[]");
     history.unshift(entry);
     localStorage.setItem(key, JSON.stringify(history.slice(0, 50)));
-  } catch { /* private mode: history is a nice-to-have, never block the scan */ }
+  } catch { /* private mode */ }
 }
+
+// ---------------------------------------------------------------------------
+// scan dispatch
+// ---------------------------------------------------------------------------
 
 const SAMPLES = [
   { label: "Safe (real bank OTP)", text: "Your SBI OTP for net banking login is 448210. Valid for 10 minutes. Never share this OTP with anyone including bank staff. -SBI" },
   { label: "Phishing (KYC)", text: "Dear customer your KYC has expired!! update it immediately on secure-sbi-kyc.com otherwise your account will be blocked within 24hrs - SBI" },
   { label: "OTP theft attempt", text: "Sir aapke card se 62,000 ki shopping ho rahi hai abhi. Block karne ke liye jo OTP aaya hai wo batao jaldi" },
   { label: "Task scam", text: "Ghar baithe 4,000 rozana kamao. Simple copy paste ka kaam. Sirf 1,200 ka activation charge hai. Aaj se pehla payment kal milega" },
-  { label: "Digital arrest", text: "Sir I am officer Rajesh from CBI economic offence wing. There is a complaint against your Aadhaar for money laundering involving 45 lakh. This is virtual police notice. To resolve digitally and avoid arrest, transfer the verification amount immediately" },
+  { label: "Digital arrest", text: "Sir I am officer Rajesh from CBI. There is a complaint against your Aadhaar for money laundering. This is virtual police notice. Transfer the verification amount immediately" },
   { label: "Safe (delivery)", text: "Delivered: Your Amazon order #402-8817734-9912 (1 item) was handed directly to resident at 2:42 PM. No signature required. Thank you for shopping with us" },
 ];
-
-function renderSamples() {
-  const box = $("samples");
-  box.textContent = "";
-  const label = document.createElement("span");
-  label.className = "samples-label";
-  label.textContent = "Try an example:";
-  box.appendChild(label);
-  for (const sample of SAMPLES) {
-    const chip = document.createElement("button");
-    chip.className = "chip";
-    chip.textContent = sample.label;
-    chip.addEventListener("click", () => {
-      $("input").value = sample.text;
-      onScan();
-    });
-    box.appendChild(chip);
-  }
-}
-
-let analysis_signals = [];
 
 async function onScan() {
   const text = $("input").value.trim();
   if (!text) return;
   $("scan-btn").disabled = true;
-  $("status").textContent = "scanning...";
 
   try {
     if (state.phase === "ready") {
       let probs;
       try {
         probs = await scanWithModel(text);
-      } catch (err) {
-        enterDemoMode("inference error: " + err.message);
-        return onScan();
+      } catch {
+        // model inference failed: fall back to rule engine for this scan
+        probs = null;
       }
-      const labelNames = Object.keys(state.thresholds || {});
-      const names = labelNames.length ? labelNames : probs.map((_, i) => `label_${i}`);
-      const fused = fuse(probs, names, text, state.thresholds);
-      analysis_signals = fused.signals;
-      renderScan(fused.all, fused.score, `full model - ran locally (${state.accelerated})`, text);
-    } else if (state.phase === "demo") {
+      if (probs) {
+        const labelNames = Object.keys(state.thresholds || {});
+        const names = labelNames.length ? labelNames : probs.map((_, i) => `label_${i}`);
+        const fused = fuse(probs, names, text, state.thresholds);
+        _signals = fused.signals;
+        renderScan(fused.hits.concat(fused.weak), fused.score, `full model - ran locally (${state.accelerated})`, text);
+      } else {
+        const result = rule_scan(text);
+        _signals = result.signals;
+        renderScan(
+          [...result.hits, ...result.weak].map((r) => ({ ...r, threshold: 0.5 })),
+          result.score,
+          "rule engine - full model not loaded",
+          text
+        );
+      }
+    } else {
+      // demo mode (model not loaded yet)
       const result = rule_scan(text);
-      analysis_signals = result.signals;
+      _signals = result.signals;
       renderScan(
         [...result.hits, ...result.weak].map((r) => ({ ...r, threshold: 0.5 })),
         result.score,
@@ -325,18 +335,33 @@ async function onScan() {
   }
 }
 
-function saveHistoryLocal(entry) {
-  try {
-    const key = "scamless_history";
-    const history = JSON.parse(localStorage.getItem(key) || "[]");
-    history.unshift(entry);
-    localStorage.setItem(key, JSON.stringify(history.slice(0, 50)));
-  } catch { /* private mode */ }
+// ---------------------------------------------------------------------------
+// boot
+// ---------------------------------------------------------------------------
+
+const SAMPLE_LABELS = SAMPLES;
+
+function renderSamples() {
+  const box = $("samples");
+  box.textContent = "";
+  const label = document.createElement("span");
+  label.className = "samples-label";
+  label.textContent = "Try an example:";
+  box.appendChild(label);
+  for (const sample of SAMPLE_LABELS) {
+    const chip = document.createElement("button");
+    chip.className = "chip";
+    chip.textContent = sample.label;
+    chip.addEventListener("click", () => {
+      $("input").value = sample.text;
+      onScan();
+    });
+    box.appendChild(chip);
+  }
 }
 
-function saveHistory(entry) { saveHistoryLocal(entry); }
-
 async function boot() {
+  // 1. wire up UI - the site is NEVER useless
   $("scan-btn").addEventListener("click", onScan);
   $("clear-btn").addEventListener("click", () => {
     $("input").value = "";
@@ -346,21 +371,19 @@ async function boot() {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") onScan();
   });
 
-  env.allowLocalModels = false;
-
-  // rule engine is available IMMEDIATELY - no blocking, no waiting
+  // 2. rule engine works IMMEDIATELY - zero dependencies
   state.phase = "demo";
   setStatus("Rule engine ready - model loading in background", "ready");
   $("load-detail").textContent = "Scanning with pattern analysis. Trained model loading in background...";
   $("scan-btn").disabled = false;
   renderSamples();
 
-  // model downloads in background - when it arrives, future scans use it
-  try {
-    await loadModel();
-  } catch {
-    // model failed to load: rule engine continues working, status already set
-  }
+  // 3. model downloads in background (non-blocking)
+  //    when it arrives, future scans use the trained model + fusion
+  loadModel().catch((err) => {
+    setStatus("Rule engine active (model unavailable: " + err.message + ")", "error");
+    $("load-detail").textContent = "The rule engine is still fully functional.";
+  });
 }
 
 boot();
