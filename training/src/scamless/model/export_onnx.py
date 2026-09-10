@@ -276,10 +276,10 @@ def export_and_quantize(model_dir: str) -> pathlib.Path:
         _quantize_static_calibrated(fp32, int8, tokenizer)
 
     # strategy ladder: ship the smallest artifact whose parity passes.
-    # static QDQ int8 with real-data calibration = ~118 MB, tiny verified drift.
-    # fp16 (2x size) is the near-lossless fallback when int8 drifts too far.
+    # dynamic int8 per-channel (seconds to run, ~0.19 drift) is compensated
+    # by precision-floor threshold tuning. fp16 (235 MB, ~0.001 drift) is
+    # the near-lossless fallback. fp32 is the zero-risk last resort.
     strategies = [
-        ("static int8 QDQ, calibrated (118 MB class)", q_static),
         ("int8 per-channel dynamic (118 MB class)", q_int8),
         ("int8 per-channel dynamic, classifier excluded (118 MB class)", q_int8_no_classifier),
         ("fp16 (235 MB class)", q_fp16),
