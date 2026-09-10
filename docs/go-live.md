@@ -43,29 +43,31 @@ drive.mount("/content/drive", force_remount=True)
 !git fetch origin && git reset --hard origin/main
 !pip install -q huggingface_hub
 
-import getpass, pathlib
+import getpass
 token = getpass.getpass("Paste your HF WRITE token (hf_...): ")
 assert token.startswith("hf_"), "token should start with hf_"
 
-REPO = "RishavGupta01/scamless-model-v1"
-model_dir = pathlib.Path("/content/drive/MyDrive/scamless/artifacts/model_v1")
-assert (model_dir / "onnx" / "model_int8.onnx").exists(), (
+model_dir = "/content/drive/MyDrive/scamless/artifacts/model_v1"
+assert __import__("pathlib").Path(model_dir, "onnx", "model_int8.onnx").exists(), (
     "exported artifact not found - run the export + eval cell first"
 )
 
-!python training/scripts/prepare_web_model.py --model-dir "{model_dir}"
+# stage the files, upload under YOUR username (auto-detected from the token)
+!python training/scripts/prepare_web_model.py --model-dir "{model_dir}" --upload scamless-model-v1 --token "{token}"
 
-from huggingface_hub import HfApi
-api = HfApi(token=token)
-api.create_repo(REPO, exist_ok=True, repo_type="model")
-api.upload_folder(folder_path="publish/web-model", repo_id=REPO, repo_type="model")
-print("LIVE: https://huggingface.co/" + REPO)
+print("IMPORTANT: apps/web/js/config.js MODEL_REPO must match the repo id printed above")
 ```
 
 The staged bundle contains: `config.json`, `tokenizer.json`,
-`tokenizer_config.json`, `special_tokens_map.json`, `vocab.txt`,
+`tokenizer_config.json`, `special_tokens_map.json`, the tokenizer model file,
 `onnx/model_int8.onnx`, and `thresholds.json` (the calibrated per-label
 thresholds from the tuning pass).
+
+**After uploading:** open `apps/web/js/config.js` and make sure `MODEL_REPO`
+matches the repo id printed by the cell (for example
+`"your-hf-username/scamless-model-v1"`). If it differs, edit that one line,
+commit, and push - Pages redeploys automatically. Or paste your HF username
+and have it updated for you.
 
 ## Step 4: Verify the full product (3 minutes)
 
