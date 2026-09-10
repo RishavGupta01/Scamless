@@ -12,7 +12,7 @@ import { fuse } from "./fusion.js";
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  phase: "idle", // idle | loading | ready | demo
+  phase: "idle",
   tokenizer: null,
   model: null,
   thresholds: null,
@@ -44,7 +44,7 @@ async function loadThresholds() {
 }
 
 async function loadModel() {
-  setStatus("Downloading detection model (one time, ~118 MB, cached after this)");
+  setStatus("Downloading detection model (one time, cached after this)");
   const progress = wireProgress((loaded, total) => {
     const mb = (loaded / 1e6).toFixed(0);
     const totalMb = (total / 1e6).toFixed(0);
@@ -58,7 +58,7 @@ async function loadModel() {
   state.model = await AutoModelForSequenceClassification.from_pretrained(CONFIG.MODEL_REPO, {
     progress_callback: progress,
     model_file_name: "model_int8",
-    dtype: "fp32", // artifact is fp32 content under the model_int8 name; don't let transformers.js append _quantized
+    dtype: "fp32",
   });
   state.thresholds = await loadThresholds();
   state.phase = "ready";
@@ -76,7 +76,7 @@ function enterDemoMode(reason) {
   setStatus("Rule engine active - full model unavailable", "error");
   $("load-detail").textContent =
     `Full model could not load (${reason}). Scans use the built-in rule engine: ` +
-    "weighted pattern analysis + link/homoglyph/OTP signals. Reload later for the trained model.";
+    "weighted pattern analysis + link/homoglyph/OTP signals.";
   $("load-progress").hidden = true;
   $("scan-btn").disabled = false;
   renderSamples();
@@ -118,9 +118,6 @@ function animateScore(el, target) {
   requestAnimationFrame(step);
 }
 
-// tactic span highlighting: only fires on messages the model flagged as
-// SUSPICIOUS or DANGEROUS - annotating a SAFE message with scary colors
-// is misleading and trains users to ignore the highlights
 const TACTIC_PATTERNS = [
   { cls: "link", re: /\b(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi },
   { cls: "otp", re: /\b\d{6,8}\b/g },
@@ -129,12 +126,8 @@ const TACTIC_PATTERNS = [
 ];
 
 function annotate(text, hits) {
-  // no annotation for clean verdicts - showing scary highlights on a SAFE
-  // message trains users to ignore the pattern
-  if (!hits.length) {
-    $("annotated-panel").hidden = true;
-    return;
-  }
+  const panel = $("annotated-panel");
+  if (!hits.length) { panel.hidden = true; return; }
 
   const ranges = [];
   for (const { cls, re } of TACTIC_PATTERNS) {
@@ -162,15 +155,20 @@ function annotate(text, hits) {
     cursor = r.end;
   }
   if (cursor < text.length) host.appendChild(document.createTextNode(text.slice(cursor)));
+  panel.hidden = false;
 }
 
-function renderLabels(hits) {
+function renderLabels(hits, weak) {
   const list = $("verdict-labels");
   list.textContent = "";
-  if (!hits.length) {
-    list.textContent = "No scam pattern matched above its calibrated threshold.";
+  if (hits.length) {
+    list.textContent = hits.map((h) =>
+      CATEGORIES[h.label].name + (h.engine === "rules" ? " (link analysis)" : "")
+    ).join(" + ");
+  } else if (weak.length) {
+    list.textContent = "Weak signals: " + weak.map((w) => CATEGORIES[w.label].name).join(", ") + " - below alert threshold";
   } else {
-    list.textContent = hits.map((h) => CATEGORIES[h.label].name + (h.engine === "rules" ? " (link analysis)" : "")).join(" + ");
+    list.textContent = "No scam indicators detected.";
   }
 }
 
@@ -192,34 +190,36 @@ function whyRow(head, prob, body, cls) {
   return li;
 }
 
-function renderWhy(hits, weak, signals) {
+function renderWhy(all) {
   const list = $("why-list");
   list.textContent = "";
-  if (!hits.length && !weak.length && !signals.length) {
+
+  // show labels sorted by fused probability, filtering noise below 5%
+  const relevant = all
+    .filter((r) => r.fused >= 0.05)
+    .sort((a, b) => b.fused - a.fused)
+    .slice(0, 8);
+
+  if (!relevant.length) {
     const li = document.createElement("li");
     li.textContent = "No scam indicators found in this text.";
     list.appendChild(li);
     return;
   }
-  for (const h of hits) {
-    list.appendChild(whyRow(
-      (h.engine === "rules" ? "Link analysis: " : "") + CATEGORIES[h.label].name,
-      h.fused ?? h.prob,
-      CATEGORIES[h.label].blurb
-    ));
+
+  for (const r of relevant) {
+    const isHit = r.fused >= r.threshold;
+    const head = (isHit ? "" : "Possible ") + CATEGORIES[r.label].name;
+    const blurb = CATEGORIES[r.label].blurb;
+    list.appendChild(whyRow(head, r.fused, blurb, isHit ? "" : "weak"));
   }
-  for (const w of weak) {
-    list.appendChild(whyRow(
-      "Possible " + CATEGORIES[w.label].name,
-      w.fused ?? w.prob,
-      CATEGORIES[w.label].blurb,
-      "weak"
-    ));
-  }
-  for (const s of signals) {
+
+  for (const s of analysis_signals) {
     list.appendChild(whyRow("Signal: " + s.id.replace(/_/g, " "), null, s.detail, "weak"));
   }
 }
+
+let analysis_signals = [];
 
 function renderPlaybook(hits) {
   const panel = $("playbook");
@@ -229,58 +229,21 @@ function renderPlaybook(hits) {
   panel.hidden = false;
 }
 
-function computeHits(modelProbs, labelNames) {
-  const thresholdFor = (label) => {
-    const t = state.thresholds && state.thresholds[label];
-    return typeof t === "number" ? t : 0.5;
-  };
-  const hits = [];
-  const weak = [];
-  labelNames.forEach((label, i) => {
-    const prob = modelProbs[i];
-    const row = { label, prob, weak: prob < thresholdFor(label), engine: "model" };
-    (row.weak ? weak : hits).push(row);
-  });
-  hits.sort((a, b) => b.prob - a.prob);
-  weak.sort((a, b) => b.prob - a.prob);
-  return { hits, weak };
-}
-
-function renderScan(hits, weak, signals, score, engineTag, text) {
+function renderScan(all, score, engineTag, text) {
   renderRisk(score);
-  renderLabels(hits);
-  renderWhy(hits, weak, signals);
-  renderPlaybook(hits);
-  annotate(text, hits);
+  renderLabels(all.filter((r) => r.fused >= r.threshold));
+  renderWhy(all);
+  renderPlaybook(all.filter((r) => r.fused >= r.threshold));
+  if (all.some((r) => r.fused >= r.threshold)) {
+    annotate(text, all.filter((r) => r.fused >= r.threshold));
+  } else {
+    $("annotated-panel").hidden = true;
+  }
   $("result").hidden = false;
   const tag = $("engine-tag");
   tag.hidden = false;
   tag.textContent = engineTag;
-  saveHistory({ score, hits: hits.map((h) => h.label), engine: engineTag, at: new Date().toISOString() });
-}
-
-function onScan() {
-  const text = $("input").value.trim();
-  if (!text) return;
-  if (state.phase === "ready") {
-    (async () => {
-      let probs;
-      try {
-        probs = await scanWithModel(text);
-      } catch (err) {
-        enterDemoMode("inference error: " + err.message);
-        return onScan();
-      }
-      const labelNames = Object.keys(state.thresholds || {});
-      const names = labelNames.length ? labelNames : probs.map((_, i) => `label_${i}`);
-      const modelHits = computeHits(probs, names);
-      const fused = fuse(probs, names, text, state.thresholds);
-      renderScan(fused.hits, fused.weak, fused.signals, fused.score, `full model - ran locally (${state.accelerated})`, text);
-    })();
-  } else if (state.phase === "demo") {
-    const result = rule_scan(text);
-    renderScan(result.hits, result.weak, result.signals, result.score, "rule engine - full model not loaded", text);
-  }
+  saveHistory({ score, engine: engineTag, at: new Date().toISOString() });
 }
 
 function saveHistory(entry) {
@@ -297,6 +260,8 @@ const SAMPLES = [
   { label: "Phishing (KYC)", text: "Dear customer your KYC has expired!! update it immediately on secure-sbi-kyc.com otherwise your account will be blocked within 24hrs - SBI" },
   { label: "OTP theft attempt", text: "Sir aapke card se 62,000 ki shopping ho rahi hai abhi. Block karne ke liye jo OTP aaya hai wo batao jaldi" },
   { label: "Task scam", text: "Ghar baithe 4,000 rozana kamao. Simple copy paste ka kaam. Sirf 1,200 ka activation charge hai. Aaj se pehla payment kal milega" },
+  { label: "Digital arrest", text: "Sir I am officer Rajesh from CBI economic offence wing. There is a complaint against your Aadhaar for money laundering involving 45 lakh. This is virtual police notice. To resolve digitally and avoid arrest, transfer the verification amount immediately" },
+  { label: "Safe (delivery)", text: "Delivered: Your Amazon order #402-8817734-9912 (1 item) was handed directly to resident at 2:42 PM. No signature required. Thank you for shopping with us" },
 ];
 
 function renderSamples() {
@@ -317,6 +282,54 @@ function renderSamples() {
     box.appendChild(chip);
   }
 }
+
+let analysis_signals = [];
+
+async function onScan() {
+  const text = $("input").value.trim();
+  if (!text) return;
+  $("scan-btn").disabled = true;
+  $("status").textContent = "scanning...";
+
+  try {
+    if (state.phase === "ready") {
+      let probs;
+      try {
+        probs = await scanWithModel(text);
+      } catch (err) {
+        enterDemoMode("inference error: " + err.message);
+        return onScan();
+      }
+      const labelNames = Object.keys(state.thresholds || {});
+      const names = labelNames.length ? labelNames : probs.map((_, i) => `label_${i}`);
+      const fused = fuse(probs, names, text, state.thresholds);
+      analysis_signals = fused.signals;
+      renderScan(fused.all, fused.score, `full model - ran locally (${state.accelerated})`, text);
+    } else if (state.phase === "demo") {
+      const result = rule_scan(text);
+      analysis_signals = result.signals;
+      renderScan(
+        [...result.hits, ...result.weak].map((r) => ({ ...r, threshold: 0.5 })),
+        result.score,
+        "rule engine - full model not loaded",
+        text
+      );
+    }
+  } finally {
+    $("scan-btn").disabled = false;
+  }
+}
+
+function saveHistoryLocal(entry) {
+  try {
+    const key = "scamless_history";
+    const history = JSON.parse(localStorage.getItem(key) || "[]");
+    history.unshift(entry);
+    localStorage.setItem(key, JSON.stringify(history.slice(0, 50)));
+  } catch { /* private mode */ }
+}
+
+function saveHistory(entry) { saveHistoryLocal(entry); }
 
 async function boot() {
   $("scan-btn").addEventListener("click", onScan);

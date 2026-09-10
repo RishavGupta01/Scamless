@@ -2,6 +2,6 @@
   "macro_f1_min": 0.65,
   "fp_rate_max": 0.06,
   "scam_union_f1_min": 0.80,
-  "precision_floor": 0.90,
-  "notes": "v0.9 launch gates: macro-F1 over evaluable labels (support >= 30), union scam-detection F1 (the product-level metric: any scam flagged counts), and FP rate. Tighten toward spec section 7 targets (0.95 / 0.01) as weak-category data grows."
+  "precision_floor": 0.60,
+  "notes": "v0.9 launch gates. precision_floor 0.60: the tuner picks the F1-best threshold among candidates with precision >= 60%. This is calibrated for a model with overlapping categories (phishing/generic_spam share training signal) where 0.90 precision floors pushed thresholds to 0.95 and killed recall to 0.13. Tighten as data grows."
 }
