@@ -6,7 +6,7 @@ import { AutoTokenizer, AutoModelForSequenceClassification, env } from
   "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.1";
 import { CONFIG } from "./config.js";
 import { CATEGORIES, riskBand } from "./categories.js";
-import { heuristic_scan } from "./heuristic.js";
+import { rule_scan } from "./heuristic.js";
 import { fuse } from "./fusion.js";
 
 const $ = (id) => document.getElementById(id);
@@ -72,10 +72,10 @@ async function loadModel() {
 
 function enterDemoMode(reason) {
   state.phase = "demo";
-  setStatus("Demo mode: keyword rules only (model unavailable)", "error");
+  setStatus("Rule engine active - full model unavailable", "error");
   $("load-detail").textContent =
-    `Full model could not load (${reason}). Results use simple keyword rules, ` +
-    "not the trained detector. Reload later for full protection.";
+    `Full model could not load (${reason}). Scans use the built-in rule engine: ` +
+    "weighted pattern analysis + link/homoglyph/OTP signals. Reload later for the trained model.";
   $("load-progress").hidden = true;
   $("scan-btn").disabled = false;
   renderSamples();
@@ -272,8 +272,8 @@ function onScan() {
       renderScan(fused.hits, fused.weak, fused.signals, fused.score, `full model - ran locally (${state.accelerated})`, text);
     })();
   } else if (state.phase === "demo") {
-    const hits = heuristic_scan(text).sort((a, b) => b.prob - a.prob);
-    renderScan(hits, [], [], hits[0] ? Math.round(hits[0].prob * 100) : 0, "demo keyword rules - not the trained model", text);
+    const result = rule_scan(text);
+    renderScan(result.hits, result.weak, result.signals, result.score, "rule engine - full model not loaded", text);
   }
 }
 

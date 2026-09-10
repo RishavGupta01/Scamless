@@ -26,11 +26,12 @@ def main() -> None:
         urllib.request.urlretrieve(url, dest)
         print(f"  -> {dest} ({dest.stat().st_size / 1e6:.1f} MB)")
 
-    # shared fusion engine lives in the web app; keep the copies in sync
-    fusion_src = HERE.parent / "web" / "js" / "fusion.js"
-    fusion_dest = HERE / "fusion.js"
-    shutil.copy2(fusion_src, fusion_dest)
-    print(f"  -> {fusion_dest} (copied from web app)")
+    # shared modules live in the web app; keep the copies in sync
+    for shared in ("fusion.js", "heuristic.js"):
+        src = HERE.parent / "web" / "js" / shared
+        dest = HERE / shared
+        shutil.copy2(src, dest)
+        print(f"  -> {dest} (copied from web app)")
 
     print("done - the extension is ready to load unpacked")
 

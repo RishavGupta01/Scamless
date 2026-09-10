@@ -67,6 +67,15 @@ h1, h2, h3, .brand { font-family: var(--font-display); }
 .hero .accent { color: var(--accent); }
 .hero .sub { color: var(--text-dim); max-width: 660px; margin: 0 0 28px; }
 
+.trust-chips { display: flex; flex-wrap: wrap; gap: 10px; margin: -8px 0 28px; }
+.trust-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--border); border-radius: 99px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  color: var(--text-dim); font: 600 0.8rem var(--font-body); padding: 6px 14px;
+}
+.trust-chip svg { width: 13px; height: 13px; stroke: var(--accent); }
+
 .model-status {
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   border: 1px solid var(--border);

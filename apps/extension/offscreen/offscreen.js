@@ -5,6 +5,7 @@
 
 import { AutoTokenizer, AutoModelForSequenceClassification } from "../vendor/transformers.min.js";
 import { fuse } from "../fusion.js";
+import { rule_scan } from "../heuristic.js";
 
 const MODEL_REPO = "RishavGupta01/scamless-model-v1";
 const MAX_LEN = 256;
@@ -13,15 +14,25 @@ let tokenizer = null;
 let model = null;
 let thresholds = null;
 
+let modelFailed = false;
+
 async function ensureModel() {
-  if (model) return;
-  tokenizer = await AutoTokenizer.from_pretrained(MODEL_REPO);
-  model = await AutoModelForSequenceClassification.from_pretrained(MODEL_REPO, {
-    model_file_name: "model_int8",
-  });
-  const res = await fetch(`https://huggingface.co/${MODEL_REPO}/resolve/main/thresholds.json`);
-  if (!res.ok) throw new Error(`thresholds fetch failed: ${res.status}`);
-  thresholds = await res.json();
+  if (model || modelFailed) return;
+  try {
+    tokenizer = await AutoTokenizer.from_pretrained(MODEL_REPO);
+    model = await AutoModelForSequenceClassification.from_pretrained(MODEL_REPO, {
+      model_file_name: "model_int8",
+    });
+    const res = await fetch(`https://huggingface.co/${MODEL_REPO}/resolve/main/thresholds.json`);
+    if (!res.ok) throw new Error(`thresholds fetch failed: ${res.status}`);
+    thresholds = await res.json();
+  } catch (err) {
+    // model unavailable (offline first run, HF outage): degrade to the rule
+    // engine instead of dead-ending - verdicts are tagged so the popup can
+    // show which engine produced them
+    modelFailed = true;
+    throw err;
+  }
 }
 
 function sigmoid(x) {
@@ -34,7 +45,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
       await ensureModel();
+    } catch (err) {
+      // rule-engine fallback: same response shape, tagged engine
+      const result = rule_scan(msg.text);
+      sendResponse({
+        ok: true,
+        hits: result.hits,
+        weak: result.weak,
+        signals: result.signals,
+        score: result.score,
+        engine: "rules",
+      });
+      return;
+    }
 
+    try {
       const enc = tokenizer(msg.text, { truncation: true, max_length: MAX_LEN });
       const output = await model({
         input_ids: [enc.input_ids],
@@ -61,7 +86,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       hits.sort((a, b) => (b.fused ?? b.prob) - (a.fused ?? a.prob));
 
       const score = fused.score;
-      sendResponse({ ok: true, hits, weak, signals: fused.signals, score });
+      sendResponse({ ok: true, hits, weak, signals: fused.signals, score, engine: "model" });
     } catch (err) {
       sendResponse({ ok: false, error: String((err && err.message) || err) });
     }
