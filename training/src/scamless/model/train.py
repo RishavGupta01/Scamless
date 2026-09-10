@@ -283,6 +283,9 @@ def _make_trainer(model, train_ds, val_ds, cfg, pos_weight):
             and torch.cuda.get_device_capability(0)[0] >= 8
         ),
         dataloader_num_workers=2,
+        # group similar-length texts into the same batch: dynamic padding then
+        # wastes almost nothing (biggest single training-speed lever)
+        group_by_length=True,
         logging_steps=50,
         # mid-training checkpoints survive session disconnects when
         # output_dir is on Drive; resume_from_checkpoint picks them up

@@ -72,6 +72,62 @@ def probs_to_labels(probs: np.ndarray, thresholds: dict) -> list[list[str]]:
     ]
 
 
+def predict_torch_probs(df: pd.DataFrame, model_dir: str, max_len: int = 256) -> np.ndarray:
+    """GPU inference from the torch weights: ~10x faster than CPU ONNX sweeps.
+
+    Used for the large quality sweeps when CUDA is available; the exported
+    ONNX artifact is still validated separately by the parity check below.
+    """
+    import torch
+    from transformers import AutoModelForSequenceClassification
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = AutoModelForSequenceClassification.from_pretrained(model_dir).to(device).eval()
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+
+    texts = [str(t) for t in df["text"]]
+    probs_batches = []
+    B = 256
+    with torch.no_grad():
+        for i in range(0, len(texts), B):
+            enc = tokenizer(
+                texts[i : i + B], truncation=True, max_length=max_len, padding=True,
+                return_tensors="pt",
+            ).to(device)
+            logits = model(**enc).logits
+            probs_batches.append(torch.sigmoid(logits).cpu().numpy())
+            print(f"  gpu inference {min(i + B, len(texts))}/{len(texts)}", flush=True)
+    del model
+    if device == "cuda":
+        import torch as _t
+
+        _t.cuda.empty_cache()
+    return np.concatenate(probs_batches, axis=0)
+
+
+def onnx_parity_check(df: pd.DataFrame, model_dir: str, torch_probs: np.ndarray, n: int = 256) -> float:
+    """Confirm the exported int8 artifact matches the torch weights on a sample."""
+    sub = df.iloc[:n].reset_index(drop=True)
+    onnx_probs = predict_onnx_probs(sub, model_dir)
+    diff = float(np.abs(onnx_probs - torch_probs[:n]).max())
+    print(f"onnx parity check ({n} samples): max prob diff = {diff:.4f}", flush=True)
+    return diff
+
+
+def sweep_probs(df: pd.DataFrame, model_dir: str, max_len: int = 256) -> tuple[np.ndarray, str]:
+    """Pick the fastest available inference path; fall back to CPU ONNX if the
+    GPU/torch path diverges from the exported artifact beyond tolerance."""
+    import torch
+
+    if torch.cuda.is_available():
+        probs = predict_torch_probs(df, model_dir, max_len)
+        diff = onnx_parity_check(df, model_dir, probs)
+        if diff <= 0.10:
+            return probs, "torch-gpu"
+        print(f"parity diff {diff:.4f} > 0.10 - falling back to CPU ONNX sweep", flush=True)
+    return predict_onnx_probs(df, model_dir, max_len), "onnx-cpu"
+
+
 def predict_onnx(df: pd.DataFrame, model_dir: str, max_len: int = 256) -> list[list[str]]:
     probs = predict_onnx_probs(df, model_dir, max_len)
     return probs_to_labels(probs, load_thresholds(model_dir))
@@ -108,7 +164,7 @@ def main() -> None:
             val_probs = np.load(cache)
             print(f"loaded cached val probabilities from {cache}")
         else:
-            val_probs = predict_onnx_probs(val_df, args.model_dir)
+            val_probs, _engine = sweep_probs(val_df, args.model_dir)
             cache.parent.mkdir(parents=True, exist_ok=True)
             np.save(cache, val_probs)
         val_truth = _truth(val_df)
@@ -130,9 +186,11 @@ def main() -> None:
         _save(val_metrics, "artifacts/eval/metrics_val.json")
 
     df = load_test_df()
-    preds = (
-        predict_baseline(df) if args.mode == "baseline" else predict_onnx(df, args.model_dir)
-    )
+    if args.mode == "baseline":
+        preds = predict_baseline(df)
+    else:
+        test_probs, _engine = sweep_probs(df, args.model_dir)
+        preds = probs_to_labels(test_probs, load_thresholds(args.model_dir))
     metrics = compute_metrics(df, preds)
 
     out = pathlib.Path("artifacts/eval/metrics.json")
