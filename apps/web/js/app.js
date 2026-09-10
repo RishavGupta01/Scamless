@@ -54,13 +54,22 @@ async function loadModel() {
     $("load-detail").textContent = `${mb} / ${totalMb} MB - runs locally after this, never downloads again`;
   });
 
-  state.tokenizer = await AutoTokenizer.from_pretrained(CONFIG.MODEL_REPO, { progress_callback: progress });
-  state.model = await AutoModelForSequenceClassification.from_pretrained(CONFIG.MODEL_REPO, {
-    progress_callback: progress,
-    model_file_name: "model_int8",
-    dtype: "fp32",
-  });
-  state.thresholds = await loadThresholds();
+  // if the download takes > 8 minutes, abort and fall back to the rule engine
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("model download timed out after 8 minutes")), 8 * 60 * 1000)
+  );
+
+  const load = async () => {
+    state.tokenizer = await AutoTokenizer.from_pretrained(CONFIG.MODEL_REPO, { progress_callback: progress });
+    state.model = await AutoModelForSequenceClassification.from_pretrained(CONFIG.MODEL_REPO, {
+      progress_callback: progress,
+      model_file_name: "model_int8",
+      dtype: "fp32",
+    });
+    state.thresholds = await loadThresholds();
+  };
+
+  await Promise.race([load(), timeout]);
   state.phase = "ready";
 
   if (navigator.gpu) state.accelerated = "WebGPU";
