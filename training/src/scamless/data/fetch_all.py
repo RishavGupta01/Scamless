@@ -7,6 +7,8 @@ retries only the missing pieces.
 Usage: python -m scamless.data.fetch_all
 """
 
+import pathlib
+
 import requests
 
 from scamless.data.download import (
@@ -22,8 +24,9 @@ from scamless.data.download import (
 
 MULTILINGUAL_SMS = "dbarbedillo/SMS_Spam_Multilingual_Collection_Dataset"
 PHISHING_V2 = "cybersectony/PhishingEmailDetectionv2.0"
+PHISHING_V2_FILE = "data/train-00000-of-00001.parquet"
 SEVEN_PHISHING = "puyang2025/seven-phishing-email-datasets"
-SEVEN_SHARDS = [f"train-0000{i}-of-00008.parquet" for i in range(8)]
+SEVEN_PHISHING_FILE = "train.parquet"
 
 
 def run() -> None:
@@ -61,9 +64,8 @@ def run() -> None:
     )
 
     def _seven_phishing() -> None:
-        for shard in SEVEN_SHARDS:
-            url = f"https://huggingface.co/datasets/{SEVEN_PHISHING}/resolve/main/{shard}"
-            fetch(url, RAW / "seven_phishing" / shard, session)
+        url = f"https://huggingface.co/datasets/{SEVEN_PHISHING}/resolve/main/{SEVEN_PHISHING_FILE}"
+        fetch(url, RAW / "seven_phishing" / SEVEN_PHISHING_FILE, session)
 
     guarded(
         "multilingual_sms",
@@ -76,8 +78,8 @@ def run() -> None:
     guarded(
         "phishing_v2",
         lambda: fetch(
-            f"https://huggingface.co/datasets/{PHISHING_V2}/resolve/main/data/train-00000-of-00002.parquet",
-            RAW / "phishing_v2" / "train-00000-of-00002.parquet",
+            f"https://huggingface.co/datasets/{PHISHING_V2}/resolve/main/{PHISHING_V2_FILE}",
+            RAW / "phishing_v2" / pathlib.Path(PHISHING_V2_FILE).name,
             session,
         ),
     )

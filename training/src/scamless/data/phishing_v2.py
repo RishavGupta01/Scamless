@@ -22,16 +22,16 @@ MIN_TEXT_CHARS = 20  # URLs are short by nature
 
 _LABEL_MAP = {0: "legitimate_email", 1: "phishing_email", 2: "legitimate_url", 3: "phishing_url"}
 
-_FILES = ["data/train-00000-of-00002.parquet"]  # 120k rows is plenty; idempotent
+_FILES = ["train-00000-of-00001.parquet"]  # single 120k-row file, idempotent
 
 
 def fetch_files(session) -> list[pathlib.Path]:
     from scamless.data.download import fetch
 
     paths = []
-    for rel in _FILES:
-        url = f"https://huggingface.co/datasets/{HF_ID}/resolve/main/{rel}"
-        dest = RAW / "phishing_v2" / pathlib.Path(rel).name
+    for name in _FILES:
+        url = f"https://huggingface.co/datasets/{HF_ID}/resolve/main/data/{name}"
+        dest = RAW / "phishing_v2" / name
         paths.append(fetch(url, dest, session))
     return paths
 
