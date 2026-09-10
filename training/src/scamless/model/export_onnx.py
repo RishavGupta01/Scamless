@@ -208,12 +208,15 @@ def _quantize_static_calibrated(fp32_path: pathlib.Path, int8_path: pathlib.Path
                 for ids, mask in zip(encs["input_ids"], encs["attention_mask"])
             ]
             self.idx = 0
+            print(f"  calibrating on {len(self.data)} texts...", flush=True)
 
         def get_next(self):
             if self.idx >= len(self.data):
                 return None
             e = self.data[self.idx]
             self.idx += 1
+            if self.idx % 128 == 0:
+                print(f"  calibrating {self.idx}/{len(self.data)}", flush=True)
             return e
 
     for method in (CalibrationMethod.Percentile, CalibrationMethod.MinMax):
