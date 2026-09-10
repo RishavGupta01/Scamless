@@ -4,6 +4,7 @@
 // Zero network calls during scanning; the model files arrive once on setup.
 
 import { AutoTokenizer, AutoModelForSequenceClassification } from "../vendor/transformers.min.js";
+import { fuse } from "../fusion.js";
 
 const MODEL_REPO = "RishavGupta01/scamless-model-v1";
 const MAX_LEN = 256;
@@ -44,17 +45,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const { sensitivity = 0 } = await chrome.storage.sync.get({ sensitivity: 0 });
       const margin = Number(sensitivity) * 0.0015; // slider 0..100 -> +0..0.15
 
+      const labelNames = Object.keys(thresholds);
+      const fused = fuse(probs, labelNames, msg.text, thresholds);
       const hits = [];
       const weak = [];
-      Object.keys(thresholds).forEach((label, i) => {
+      labelNames.forEach((label, i) => {
         const threshold = Math.min(0.99, thresholds[label] + margin);
         const row = { label, prob: probs[i], weak: probs[i] < threshold };
         (row.weak ? weak : hits).push(row);
       });
-      hits.sort((a, b) => b.prob - a.prob);
-      weak.sort((a, b) => b.prob - a.prob);
+      // fold rule-derived hits (e.g. malicious_link from link analysis) in
+      for (const ruleHit of fused.hits.filter((h) => h.engine === "rules")) {
+        if (!hits.some((h) => h.label === ruleHit.label)) hits.push(ruleHit);
+      }
+      hits.sort((a, b) => (b.fused ?? b.prob) - (a.fused ?? a.prob));
 
-      sendResponse({ ok: true, hits, weak });
+      const score = fused.score;
+      sendResponse({ ok: true, hits, weak, signals: fused.signals, score });
     } catch (err) {
       sendResponse({ ok: false, error: String((err && err.message) || err) });
     }

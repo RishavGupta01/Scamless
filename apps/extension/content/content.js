@@ -61,12 +61,11 @@ function showToast(verdict) {
     err.textContent = "Scan failed: " + ((verdict && verdict.error) || "unknown");
     card.appendChild(err);
   } else {
+    const score = typeof verdict.score === "number" ? verdict.score : 0;
     const top = verdict.hits[0];
     let bandText = "SAFE";
     let bandClass = "safe";
-    let score = 0;
-    if (top) {
-      score = Math.min(100, Math.round(top.prob * 100));
+    if (top || score > 0) {
       if (score >= 70) { bandText = "DANGEROUS"; bandClass = "danger"; }
       else if (score >= 40) { bandText = "SUSPICIOUS"; bandClass = "susp"; }
     }
@@ -83,9 +82,16 @@ function showToast(verdict) {
       name.textContent = (hit.weak ? "possible " : "") + hit.label.replace(/_/g, " ");
       const prob = document.createElement("span");
       prob.className = "prob";
-      prob.textContent = Math.round(hit.prob * 100) + "%";
+      prob.textContent = Math.round((hit.fused ?? hit.prob) * 100) + "%";
       row.append(name, prob);
       card.appendChild(row);
+    }
+
+    if (verdict.signals && verdict.signals.length) {
+      const sig = document.createElement("div");
+      sig.className = "blurb";
+      sig.textContent = "Signals: " + verdict.signals.map((s) => s.id.replace(/_/g, " ")).join(", ");
+      card.appendChild(sig);
     }
   }
 

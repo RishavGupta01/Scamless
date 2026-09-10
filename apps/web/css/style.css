@@ -85,6 +85,14 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-c
 .btn.ghost:hover { border-color: var(--text-dim); }
 .engine-tag { color: var(--text-dim); font-size: 0.85rem; }
 
+.samples { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.samples-label { color: var(--text-dim); font-size: 0.85rem; }
+.chip {
+  border: 1px solid var(--border); border-radius: 99px; background: var(--surface-2);
+  color: var(--text); font: 600 0.82rem system-ui; padding: 5px 12px; cursor: pointer;
+}
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+
 .result { margin-top: 28px; }
 .verdict-row { display: flex; gap: 24px; align-items: center; }
 .risk-meter { flex: 0 0 auto; }

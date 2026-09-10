@@ -1,12 +1,13 @@
 // Scamless web app: on-device inference via transformers.js (ONNX Runtime Web).
 // Flow: load thresholds -> load model (progress shown) -> scan -> sigmoid probs
-// -> per-label verdicts + calibrated risk score -> rule-based why panel.
+// -> fusion (model + rule signals) -> risk score -> verdict + why panel.
 
 import { AutoTokenizer, AutoModelForSequenceClassification, env } from
   "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.1";
 import { CONFIG } from "./config.js";
 import { CATEGORIES, riskBand } from "./categories.js";
 import { heuristic_scan } from "./heuristic.js";
+import { fuse } from "./fusion.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -15,9 +16,9 @@ const state = {
   tokenizer: null,
   model: null,
   thresholds: null,
+  accelerated: "WASM",
 };
 
-// transformers.js fetches model files itself; route its progress into our UI
 function wireProgress(callback) {
   const perFile = new Map();
   return (data) => {
@@ -32,8 +33,7 @@ function wireProgress(callback) {
 
 function setStatus(text, cls) {
   $("status-text").textContent = text;
-  const dot = $("status-dot");
-  dot.className = "dot" + (cls ? " " + cls : "");
+  $("status-dot").className = "dot" + (cls ? " " + cls : "");
 }
 
 async function loadThresholds() {
@@ -54,38 +54,34 @@ async function loadModel() {
     $("load-detail").textContent = `${mb} / ${totalMb} MB - runs locally after this, never downloads again`;
   });
 
-  const tokenizer = await AutoTokenizer.from_pretrained(CONFIG.MODEL_REPO, { progress_callback: progress });
-  const model = await AutoModelForSequenceClassification.from_pretrained(CONFIG.MODEL_REPO, {
+  state.tokenizer = await AutoTokenizer.from_pretrained(CONFIG.MODEL_REPO, { progress_callback: progress });
+  state.model = await AutoModelForSequenceClassification.from_pretrained(CONFIG.MODEL_REPO, {
     progress_callback: progress,
     model_file_name: "model_int8",
   });
-  state.tokenizer = tokenizer;
-  state.model = model;
   state.thresholds = await loadThresholds();
   state.phase = "ready";
 
-  setStatus("Model ready - running locally on this device", "ready");
+  if (navigator.gpu) state.accelerated = "WebGPU";
+  setStatus(`Model ready - running locally (${state.accelerated})`, "ready");
   $("load-progress").hidden = true;
   $("load-detail").textContent = "Inference happens inside this browser tab. Scan away.";
   $("scan-btn").disabled = false;
+  renderSamples();
 }
 
 function enterDemoMode(reason) {
   state.phase = "demo";
   setStatus("Demo mode: keyword rules only (model unavailable)", "error");
   $("load-detail").textContent =
-    `Full model could not load (${reason}). Scan results below use simple keyword rules, ` +
+    `Full model could not load (${reason}). Results use simple keyword rules, ` +
     "not the trained detector. Reload later for full protection.";
   $("load-progress").hidden = true;
   $("scan-btn").disabled = false;
+  renderSamples();
 }
 
 function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
-
-function labelThreshold(label) {
-  const t = state.thresholds && state.thresholds[label];
-  return typeof t === "number" ? t : 0.5;
-}
 
 async function scanWithModel(text) {
   const enc = state.tokenizer(text, { truncation: true, max_length: CONFIG.MAX_LEN });
@@ -93,8 +89,7 @@ async function scanWithModel(text) {
     input_ids: [enc.input_ids],
     attention_mask: [enc.attention_mask],
   });
-  const logits = output.logits.tolist()[0];
-  return logits.map(sigmoid);
+  return output.logits.tolist()[0].map(sigmoid);
 }
 
 function renderRisk(score) {
@@ -114,77 +109,116 @@ function renderLabels(hits) {
   if (!hits.length) {
     list.textContent = "No scam pattern matched above its calibrated threshold.";
   } else {
-    list.textContent = hits.map((h) => CATEGORIES[h.label].name).join(" + ");
+    list.textContent = hits.map((h) => CATEGORIES[h.label].name + (h.engine === "rules" ? " (link analysis)" : "")).join(" + ");
   }
 }
 
-function renderWhy(hits, weak) {
+function whyRow(head, prob, body, cls) {
+  const li = document.createElement("li");
+  if (cls) li.className = cls;
+  const headEl = document.createElement("div");
+  headEl.className = "why-head";
+  const name = document.createElement("span");
+  name.textContent = head;
+  const probEl = document.createElement("span");
+  probEl.className = "why-prob";
+  if (prob !== null) probEl.textContent = Math.round(prob * 100) + "%";
+  headEl.append(name, probEl);
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "why-body";
+  bodyEl.textContent = body;
+  li.append(headEl, bodyEl);
+  return li;
+}
+
+function renderWhy(hits, weak, signals) {
   const list = $("why-list");
   list.textContent = "";
-  const rows = [...hits, ...weak];
-  if (!rows.length) {
+  if (!hits.length && !weak.length && !signals.length) {
     const li = document.createElement("li");
     li.textContent = "No scam indicators found in this text.";
     list.appendChild(li);
     return;
   }
-  for (const row of rows) {
-    const li = document.createElement("li");
-    if (row.weak) li.className = "weak";
-    const head = document.createElement("div");
-    head.className = "why-head";
-    const name = document.createElement("span");
-    name.textContent = (row.weak ? "Possible " : "") + CATEGORIES[row.label].name;
-    const prob = document.createElement("span");
-    prob.className = "why-prob";
-    prob.textContent = Math.round(row.prob * 100) + "%";
-    head.append(name, prob);
-    const body = document.createElement("div");
-    body.className = "why-body";
-    body.textContent = CATEGORIES[row.label].blurb;
-    li.append(head, body);
-    list.appendChild(li);
+  for (const h of hits) {
+    list.appendChild(whyRow(
+      (h.engine === "rules" ? "Link analysis: " : "") + CATEGORIES[h.label].name,
+      h.fused ?? h.prob,
+      CATEGORIES[h.label].blurb
+    ));
+  }
+  for (const w of weak) {
+    list.appendChild(whyRow(
+      "Possible " + CATEGORIES[w.label].name,
+      w.fused ?? w.prob,
+      CATEGORIES[w.label].blurb,
+      "weak"
+    ));
+  }
+  for (const s of signals) {
+    list.appendChild(whyRow("Signal: " + s.id.replace(/_/g, " "), null, s.detail, "weak"));
   }
 }
 
 function renderPlaybook(hits) {
   const panel = $("playbook");
   const text = $("playbook-text");
-  if (!hits.length) {
-    panel.hidden = true;
-    return;
-  }
-  const top = hits[0];
-  text.textContent = CATEGORIES[top.label].action;
+  if (!hits.length) { panel.hidden = true; return; }
+  text.textContent = CATEGORIES[hits[0].label].action;
   panel.hidden = false;
 }
 
-function computeHits(probs, labelNames) {
+function computeHits(modelProbs, labelNames) {
+  const thresholdFor = (label) => {
+    const t = state.thresholds && state.thresholds[label];
+    return typeof t === "number" ? t : 0.5;
+  };
   const hits = [];
   const weak = [];
   labelNames.forEach((label, i) => {
-    const prob = probs[i];
-    const row = { label, prob, weak: prob < labelThreshold(label) };
-    if (!row.weak) hits.push(row);
-    else if (prob >= CONFIG.WEAK_SIGNAL) weak.push(row);
+    const prob = modelProbs[i];
+    const row = { label, prob, weak: prob < thresholdFor(label), engine: "model" };
+    (row.weak ? weak : hits).push(row);
   });
   hits.sort((a, b) => b.prob - a.prob);
   weak.sort((a, b) => b.prob - a.prob);
   return { hits, weak };
 }
 
-function renderScan(hits, weak, engineTag) {
-  const top = hits[0];
-  const score = top ? Math.min(100, Math.round(top.prob * 100)) : 0;
+function renderScan(hits, weak, signals, score, engineTag) {
   renderRisk(score);
   renderLabels(hits);
-  renderWhy(hits, weak);
+  renderWhy(hits, weak, signals);
   renderPlaybook(hits);
   $("result").hidden = false;
   const tag = $("engine-tag");
   tag.hidden = false;
   tag.textContent = engineTag;
   saveHistory({ score, hits: hits.map((h) => h.label), engine: engineTag, at: new Date().toISOString() });
+}
+
+function onScan() {
+  const text = $("input").value.trim();
+  if (!text) return;
+  if (state.phase === "ready") {
+    (async () => {
+      let probs;
+      try {
+        probs = await scanWithModel(text);
+      } catch (err) {
+        enterDemoMode("inference error: " + err.message);
+        return onScan();
+      }
+      const labelNames = Object.keys(state.thresholds || {});
+      const names = labelNames.length ? labelNames : probs.map((_, i) => `label_${i}`);
+      const modelHits = computeHits(probs, names);
+      const fused = fuse(probs, names, text, state.thresholds);
+      renderScan(fused.hits, fused.weak, fused.signals, fused.score, `full model - ran locally (${state.accelerated})`);
+    })();
+  } else if (state.phase === "demo") {
+    const hits = heuristic_scan(text).sort((a, b) => b.prob - a.prob);
+    renderScan(hits, [], [], hits[0] ? Math.round(hits[0].prob * 100) : 0, "demo keyword rules - not the trained model");
+  }
 }
 
 function saveHistory(entry) {
@@ -196,28 +230,29 @@ function saveHistory(entry) {
   } catch { /* private mode: history is a nice-to-have, never block the scan */ }
 }
 
-function onScan() {
-  const text = $("input").value.trim();
-  if (!text) return;
-  if (state.phase === "ready") {
-    const labelNames = Object.keys(state.thresholds || {});
-    const run = async () => {
-      let probs;
-      try {
-        probs = await scanWithModel(text);
-      } catch (err) {
-        enterDemoMode("inference error: " + err.message);
-        return onScan();
-      }
-      const names = labelNames.length ? labelNames : probs.map((_, i) => `label_${i}`);
-      const { hits, weak } = computeHits(probs, names);
-      renderScan(hits, weak, "full model - ran locally");
-    };
-    run();
-  } else if (state.phase === "demo") {
-    const hits = heuristic_scan(text).sort((a, b) => b.prob - a.prob);
-    const weak = [];
-    renderScan(hits, weak, "demo keyword rules - not the trained model");
+const SAMPLES = [
+  { label: "Safe (real bank OTP)", text: "Your SBI OTP for net banking login is 448210. Valid for 10 minutes. Never share this OTP with anyone including bank staff. -SBI" },
+  { label: "Phishing (KYC)", text: "Dear customer your KYC has expired!! update it immediately on secure-sbi-kyc.com otherwise your account will be blocked within 24hrs - SBI" },
+  { label: "OTP theft attempt", text: "Sir aapke card se 62,000 ki shopping ho rahi hai abhi. Block karne ke liye jo OTP aaya hai wo batao jaldi" },
+  { label: "Task scam", text: "Ghar baithe 4,000 rozana kamao. Simple copy paste ka kaam. Sirf 1,200 ka activation charge hai. Aaj se pehla payment kal milega" },
+];
+
+function renderSamples() {
+  const box = $("samples");
+  box.textContent = "";
+  const label = document.createElement("span");
+  label.className = "samples-label";
+  label.textContent = "Try an example:";
+  box.appendChild(label);
+  for (const sample of SAMPLES) {
+    const chip = document.createElement("button");
+    chip.className = "chip";
+    chip.textContent = sample.label;
+    chip.addEventListener("click", () => {
+      $("input").value = sample.text;
+      onScan();
+    });
+    box.appendChild(chip);
   }
 }
 
@@ -231,7 +266,6 @@ async function boot() {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") onScan();
   });
 
-  // transformers.js runs wasm/webgpu fully in-browser; no local server needed
   env.allowLocalModels = false;
   try {
     await loadModel();

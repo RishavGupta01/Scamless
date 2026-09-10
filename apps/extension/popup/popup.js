@@ -31,23 +31,32 @@ function render(verdict) {
 
   lastScan = verdict;
   const top = verdict.hits[0];
-  const score = top ? Math.min(100, Math.round(top.prob * 100)) : 0;
+  const score = typeof verdict.score === "number" ? verdict.score : (top ? Math.min(100, Math.round(top.prob * 100)) : 0);
   const b = bandFor(score);
   band.className = "band " + b.cls;
-  band.textContent = top ? `${b.text} - risk ${score}/100` : "SAFE - no scam pattern matched";
+  band.textContent = top || score > 0 ? `${b.text} - risk ${score}/100` : "SAFE - no scam pattern matched";
 
   const rows = (verdict.hits.length ? verdict.hits : verdict.weak).slice(0, 5);
   for (const hit of rows) {
     const row = document.createElement("div");
     row.className = "hit";
     const name = document.createElement("span");
-    name.textContent = (hit.weak ? "possible " : "") + hit.label.replace(/_/g, " ");
+    name.textContent = (hit.weak ? "possible " : "") + hit.label.replace(/_/g, " ") +
+      (hit.engine === "rules" ? " (link analysis)" : "");
     name.className = hit.weak ? "weak-label" : "";
     const prob = document.createElement("span");
     prob.className = "prob";
-    prob.textContent = Math.round(hit.prob * 100) + "%";
+    prob.textContent = Math.round((hit.fused ?? hit.prob) * 100) + "%";
     row.append(name, prob);
     hits.appendChild(row);
+  }
+
+  if (verdict.signals && verdict.signals.length) {
+    const sig = document.createElement("div");
+    sig.className = "hint";
+    sig.style.marginTop = "8px";
+    sig.textContent = "Signals: " + verdict.signals.map((s) => s.id.replace(/_/g, " ")).join(", ");
+    hits.appendChild(sig);
   }
   result.hidden = false;
 }
