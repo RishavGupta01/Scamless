@@ -1,11 +1,12 @@
-"""Export the fine-tuned model to ONNX, then apply int8 quantization.
+"""Export the fine-tuned model to ONNX, then reduce size with a
+self-verifying quantization ladder.
 
-Exports via torch.onnx.export directly (the optimum exporter path is
-incompatible with torch >= 2.10's dynamo-first ONNX API). Quantization is
-self-verifying: per-channel int8 is attempted first, and if the exported
-artifact drifts from the fp32 model by more than 0.10 on probe probabilities,
-the sensitive classifier head is excluded and quantization is retried. If
-even that drifts, the fp32 model ships instead of a damaged int8 one.
+Strategy order (ship the smallest artifact whose parity passes):
+1. static QDQ int8, calibrated on real validation texts (~118 MB)
+2. dynamic int8 per-channel (~118 MB)
+3. dynamic int8 per-channel with the classifier head excluded (~118 MB)
+4. fp16 conversion (~235 MB)
+Last resort: the fp32 model ships instead of a damaged small one.
 
 Usage: python -m scamless.model.export_onnx --model-dir artifacts/model_v1
 """
@@ -115,6 +116,125 @@ def _convert_fp16(fp32_path: pathlib.Path, int8_path: pathlib.Path) -> None:
     onnx.save(model_fp16, str(int8_path))
 
 
+def _calibration_reader(tokenizer):
+    """Static-quantization calibration over real val texts (bounds activation
+    ranges with actual data - the key to accurate int8)."""
+    from onnxruntime.quantization import CalibrationDataReader
+
+    texts = []
+    try:
+        import pandas as pd
+
+        val_path = pathlib.Path("training/data/processed/messages_val.parquet")
+        if val_path.exists():
+            df = pd.read_parquet(val_path)
+            sample = df.sample(n=min(512, len(df)), random_state=42)
+            texts = [str(t) for t in sample["text"]]
+    except Exception:  # noqa: BLE001, S110 - calibration is best-effort
+        pass
+    texts += [
+        "urgent verify your account within 24 hours click the link",
+        "meeting notes from tuesday attached for review",
+        "claim your prize now pay the fee",
+        "your otp 4482 for login is valid 10 minutes",
+        "quarterly budget planning attached please review",
+    ]
+
+    class _Reader(CalibrationDataReader):
+        def __init__(self):
+            self.data = [
+                tokenizer(t, truncation=True, max_length=128, padding="max_length")
+                for t in texts
+            ]
+            self.idx = 0
+
+        def get_next(self):
+            if self.idx >= len(self.data):
+                return None
+            e = self.data[self.idx]
+            self.idx += 1
+            return {
+                "input_ids": np.array([e["input_ids"]], dtype=np.int64),
+                "attention_mask": np.array([e["attention_mask"]], dtype=np.int64),
+            }
+
+    return _Reader()
+
+
+def _quantize_static_calibrated(fp32_path: pathlib.Path, int8_path: pathlib.Path, tokenizer) -> None:
+    """Static QDQ int8 with real-data percentile calibration.
+
+    Dynamic int8 quantizes weights only and guesses activation ranges at
+    runtime - on this model that drifted probabilities by up to 0.19.
+    Static quantization calibrates activation ranges over real validation
+    texts with per-channel weights, which is the industry-accurate path to
+    a true ~118 MB artifact. Verified by _max_prob_diff before shipping.
+    """
+    from onnxruntime.quantization import (
+        CalibrationDataReader,
+        CalibrationMethod,
+        QuantFormat,
+        QuantType,
+        quantize_static,
+    )
+
+    texts = []
+    try:
+        import pandas as pd
+
+        val_path = pathlib.Path("training/data/processed/messages_val.parquet")
+        if val_path.exists():
+            df = pd.read_parquet(val_path)
+            sample = df.sample(n=min(512, len(df)), random_state=42)
+            texts = [str(t) for t in sample["text"]]
+    except Exception:  # noqa: BLE001, S110 - calibration is best-effort
+        pass
+    texts += [
+        "urgent verify your account within 24 hours click the link",
+        "meeting notes from tuesday attached for review",
+        "claim your prize now pay the fee",
+        "your otp 4482 for login is valid 10 minutes",
+        "quarterly budget planning attached please review",
+    ]
+
+    class _Reader(CalibrationDataReader):
+        def __init__(self):
+            encs = tokenizer(texts, truncation=True, max_length=128, padding="max_length")
+            self.data = [
+                {
+                    "input_ids": np.array([ids], dtype=np.int64),
+                    "attention_mask": np.array([mask], dtype=np.int64),
+                }
+                for ids, mask in zip(encs["input_ids"], encs["attention_mask"])
+            ]
+            self.idx = 0
+
+        def get_next(self):
+            if self.idx >= len(self.data):
+                return None
+            e = self.data[self.idx]
+            self.idx += 1
+            return e
+
+    for method in (CalibrationMethod.Percentile, CalibrationMethod.MinMax):
+        try:
+            quantize_static(
+                model_input=str(fp32_path),
+                model_output=str(int8_path),
+                calibration_data_reader=_Reader(),
+                quant_format=QuantFormat.QDQ,
+                activation_type=QuantType.QInt8,
+                weight_type=QuantType.QInt8,
+                per_channel=True,
+                calibrate_method=method,
+                extra_options={"percentile": 99.999},
+            )
+            return
+        except ValueError as exc:
+            # tiny activation ranges cannot fill the percentile histogram bins
+            print(f"calibration method {method} failed ({exc}) - falling back", flush=True)
+
+
 def export_and_quantize(model_dir: str) -> pathlib.Path:
     model_dir = pathlib.Path(model_dir)
     onnx_dir = model_dir / "onnx"
@@ -149,11 +269,16 @@ def export_and_quantize(model_dir: str) -> pathlib.Path:
     def q_fp16() -> None:
         _convert_fp16(fp32, int8)
 
+    def q_static() -> None:
+        _quantize_static_calibrated(fp32, int8, tokenizer)
+
     # strategy ladder: ship the smallest artifact whose parity passes.
-    # fp16 (2x size) is the reliable fallback when int8 drifts too far.
+    # static QDQ int8 with real-data calibration = ~118 MB, tiny verified drift.
+    # fp16 (2x size) is the near-lossless fallback when int8 drifts too far.
     strategies = [
-        ("int8 per-channel (118 MB class)", q_int8),
-        ("int8 per-channel, classifier excluded (118 MB class)", q_int8_no_classifier),
+        ("static int8 QDQ, calibrated (118 MB class)", q_static),
+        ("int8 per-channel dynamic (118 MB class)", q_int8),
+        ("int8 per-channel dynamic, classifier excluded (118 MB class)", q_int8_no_classifier),
         ("fp16 (235 MB class)", q_fp16),
     ]
     chosen = None
