@@ -5,7 +5,7 @@
 // See docs/model-hosting.md for the one-command upload.
 
 export const CONFIG = {
-  MODEL_REPO: "RishavGupta01/scamless-model-v1",
+  MODEL_REPO: "Rishavgupta/scamless-model-v1",
   MAX_LEN: 256,
   // risk bands (0-100), per spec section 9
   BANDS: { suspicious: 40, dangerous: 70 },

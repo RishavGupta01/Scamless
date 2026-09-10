@@ -27,7 +27,7 @@ Create a free account, then a repo named `scamless-model-v1` (or edit
 `apps/web/js/config.js` to match whatever name you choose), and run:
 
     set HF_TOKEN=your_write_token
-    python training/scripts/prepare_web_model.py --model-dir artifacts/model_v1 --upload RishavGupta01/scamless-model-v1
+    python training/scripts/prepare_web_model.py --model-dir artifacts/model_v1 --upload Rishavgupta/scamless-model-v1
 
 The app reads the repo id from `apps/web/js/config.js` - keep them in sync.
 
