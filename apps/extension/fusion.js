@@ -1,8 +1,11 @@
-// Scamless fusion engine v1 - the spec's section-5 intelligence layer.
+// Scamless fusion engine v1.1 - the spec's section-5 intelligence layer.
 // Combines the trained model's probabilities with deterministic rule
-// signals the classifier cannot see directly (URL structure, homoglyph
-// attacks, OTP patterns, urgency language). Explainable by design: every
-// point of the risk score traces to a named signal.
+// signals (URL analysis, homoglyph attacks, OTP patterns, urgency language).
+// Every point of the risk score traces to a named signal.
+//
+// Cross-label agreement: when multiple scam labels fire at moderate
+// probability simultaneously, the top label gets boosted - multiple weak
+// indicators pointing at the same conclusion are stronger than any alone.
 //
 // This file is shared verbatim between the web app (js/) and the Chrome
 // extension (root) - fetch-deps.py copies it at packaging time.
@@ -26,18 +29,15 @@ const OFFICIAL_HOSTS = new Set([
   "wellsfargo.com", "binance.com", "coinbase.com", "phonepe.com",
 ]);
 
-// Cyrillic + fullwidth lookalikes for common Latin scam targets
-const HOMOGLYPHS = new Set("аеорсухіѕӏᴬ".concat("аеорсухі"));
-const HOMOGLYPH_SET = new Set([
-  ..."аеорсухі", // cyrillic а е о р с у х і
-  ..."\u0430\u0435\u043E\u0440\u0441\u0443\u0445\u0456".split(""),
+const HOMOGLYPH_CHARS = new Set([
+  ..."\u0430\u0435\u043E\u0440\u0441\u0443\u0445\u0456", // cyrillic а е о р с у х і
 ]);
 
 const URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi;
 const BARE_DOMAIN_RE =
   /\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|net|org|info|xyz|top|online|site|icu|in|co|io|ru|cn|buzz|cfd|monster)\b/gi;
 const OTP_RE = /\b(?:otp|one[\s-]?time (?:password|code)|verification code|pin)\b[^.]{0,40}?\b(\d{4,8})\b|\b(\d{4,8})\b[^.]{0,40}\b(?:otp|verification code)\b/i;
-const URGENCY_RE = /\b(?:urgent|immediately|final warning|last chance|act now|within \d+ (?:hours|hours|minutes)|suspended|deactivated|legal action|arrest)\b/gi;
+const URGENCY_RE = /\b(?:urgent|immediately|final warning|last chance|act now|within \d+ (?:hours|minutes)|suspended|deactivated|legal action|arrest)\b/gi;
 const DIGITAL_ARREST_RE = /\b(?:digital arrest|virtual custody|video call (?:with )?(?:police|officer|constable)|skype (?:hearing|investigation)|cbi (?:officer|case)|cyber (?:cell|police) (?:case|notice))\b/i;
 const UPI_REVERSAL_RE = /\b(?:enter|put|dial)\b[^.]{0,30}\b(?:upi )?pin\b[^.]{0,40}\b(?:receive|refund|get)\b|\b(?:receive|refund)\b[^.]{0,30}\b(?:upi )?pin\b/i;
 const PRIZE_FEE_RE = /\b(?:won|winner|prize|lottery|lucky draw)\b/i;
@@ -119,22 +119,22 @@ function dedupeSignals(signals) {
 
 export function analyzeText(text) {
   const signals = [];
-  const boosts = {}; // label -> total weight
+  const boosts = {};
 
   const addBoost = (signal, ...labels) => {
     signals.push(signal);
     for (const label of labels) {
-      boosts[label] = (boosts[label] || 0) + SIGNAL_WEIGHTS[signal.id] || 0;
+      boosts[label] = (boosts[label] || 0) + (SIGNAL_WEIGHTS[signal.id] || 0);
     }
   };
 
-  // 1. homoglyph attacks (lookalike unicode in latin words)
+  // 1. homoglyph attacks
   const words = text.split(/\s+/);
   let homoglyphHit = null;
   for (const w of words) {
     if (w.length < 4) continue;
     const hasLatin = /[a-z]/i.test(w);
-    const hasLookalike = [...w].some((c) => HOMOGLYPH_SET.has(c));
+    const hasLookalike = [...w].some((c) => HOMOGLYPH_CHARS.has(c));
     if (hasLatin && hasLookalike) { homoglyphHit = w; break; }
   }
   if (homoglyphHit) {
@@ -165,7 +165,7 @@ export function analyzeText(text) {
     );
   }
 
-  // 4. digital arrest / virtual police custody (the dominant Indian scam pattern)
+  // 4. digital arrest
   if (DIGITAL_ARREST_RE.test(text)) {
     addBoost(
       { id: "digital_arrest", detail: "Claims of virtual police custody or remote arrest - real law enforcement never operates this way" },
@@ -173,7 +173,7 @@ export function analyzeText(text) {
     );
   }
 
-  // 5. UPI PIN reversal scam ("enter PIN to RECEIVE money")
+  // 5. UPI PIN reversal
   if (UPI_REVERSAL_RE.test(text)) {
     addBoost(
       { id: "upi_pin_reversal", detail: "Asks for your UPI PIN in a money-RECEIVING context - entering a PIN always SENDS money" },
@@ -181,7 +181,7 @@ export function analyzeText(text) {
     );
   }
 
-  // 6. prize + fee combination (the single strongest lottery-scam tell)
+  // 6. prize + fee combination
   const isPrize = PRIZE_FEE_RE.test(text);
   const isFee = FEE_RE.test(text);
   if (isPrize && isFee) {
@@ -208,12 +208,46 @@ export function analyzeText(text) {
     );
   }
 
-  // 5. PII request (informational, shown but never boosts alone)
+  // 9. PII request (informational)
   if (/\b(aadhaar|ssn|passport|card number|cvv|cvv2|date of birth)\b/i.test(text)) {
     signals.push({ id: "pii_request", detail: "Message asks about identity or card details", weight: 0 });
   }
 
-  // rule-derived malicious_link hit: strong url evidence fills this label
+  // 10. e-commerce legitimacy dampener: known safe patterns that counter
+  // the false-positive problem on delivery confirmations and order updates.
+  // These signals SUBTRACT from scam scores when they match strongly.
+  let dampener = 0;
+  const dampDetails = [];
+  if (/\b(?:order|tracking)\s*#?\s*\d{4,}[-\d]*\b/i.test(text)) {
+    dampener += 0.12;
+    dampDetails.push("valid order/tracking number format");
+  }
+  if (/\b(?:handed|delivered|shipped|dispatched|out for delivery)\b/i.test(text) &&
+      /\b(?:resident|recipient|doorstep|mailbox|reception|guard)\b/i.test(text)) {
+    dampener += 0.10;
+    dampDetails.push("standard delivery confirmation language");
+  }
+  if (/\bthank you for (?:shopping|your order|choosing)\b/i.test(text)) {
+    dampener += 0.08;
+    dampDetails.push("standard merchant closing");
+  }
+  if (/\b(?:no signature required|no action (?:needed|required)|no payment)\b/i.test(text)) {
+    dampener += 0.10;
+    dampDetails.push("explicitly states no action or payment needed");
+  }
+  if (/\b(?:your|the)\s+(?:bill|invoice|statement)\s+(?:is attached|was sent|is ready)\b/i.test(text)) {
+    dampener += 0.08;
+    dampDetails.push("standard billing notification");
+  }
+  if (dampener > 0) {
+    signals.push({
+      id: "ecommerce_dampener",
+      detail: `Legitimate e-commerce patterns detected (${dampDetails.join("; ")})`,
+      dampen: Math.min(0.35, dampener),
+    });
+  }
+
+  // rule-derived malicious_link: strong URL evidence fills this label
   const urlStrong = urlSignals.length >= 2 || urlSignals.some((s) =>
     ["url_punycode", "url_brand_lookalike", "url_ip_host"].includes(s.id)
   );
@@ -238,29 +272,55 @@ export function fuse(modelProbs, labelNames, text, thresholds) {
     return typeof t === "number" ? t : 0.5;
   };
 
-  const hits = [];
-  const weak = [];
-  let topProb = 0;
+  // per-label fused probabilities
+  // e-commerce dampener: suppresses scam scores when legitimate patterns match
+  let dampen = 0;
+  for (const s of analysis.signals) {
+    if (s.dampen) dampen = Math.max(dampen, s.dampen);
+  }
+
+  const all = [];
   labelNames.forEach((label, i) => {
     const prob = modelProbs[i];
     const boost = analysis.boosts[label] || 0;
-    // fusion: the model probability is nudged upward by matching rule signals
-    const fused = Math.min(0.99, prob + boost / 250);
-    topProb = Math.max(topProb, prob);
-    const threshold = thresholdFor(label);
-    const row = { label, prob, fused, weak: fused < threshold, engine: "model" };
-    (row.weak ? weak : hits).push(row);
+    let fused = Math.min(0.99, prob + boost / 250);
+    // dampener suppresses scam probability when e-commerce legitimacy signals fire
+    if (dampen > 0) fused = Math.max(0, fused - dampen * prob);
+    all.push({ label, prob: fused, fused, threshold: thresholdFor(label) });
   });
 
-  if (analysis.ruleHit) {
-    const row = { ...analysis.ruleHit, weak: false };
-    hits.push(row);
+  // cross-label agreement: when 2+ labels fire above 0.40, boost the top
+  // label's fused score - combined evidence is stronger than any alone
+  const strongSignals = all.filter((r) => r.fused >= 0.40 && r.label !== "generic_spam");
+  if (strongSignals.length >= 2) {
+    const top = all.reduce((a, b) => (b.fused > a.fused ? b : a));
+    const bonus = Math.min(0.15, strongSignals.length * 0.05);
+    top.fused = Math.min(0.99, top.fused + bonus);
   }
-  hits.sort((a, b) => (b.fused ?? b.prob) - (a.fused ?? a.prob));
 
-  const driver = hits[0];
-  const base = driver ? (driver.fused ?? driver.prob) * 100 : 0;
-  const score = Math.min(100, Math.round(base + (driver && driver.engine === "model" ? analysis.totalBoost : 0)));
+  // split into hits (crossed calibrated threshold) and weak (meaningful but below)
+  const hits = all.filter((r) => r.fused >= r.threshold);
+  const weak = all.filter((r) => r.fused < r.threshold && r.fused >= 0.25);
+  hits.sort((a, b) => b.fused - a.fused);
+  weak.sort((a, b) => b.fused - a.fused);
+
+  // rule-derived malicious_link
+  if (analysis.ruleHit && !hits.some((h) => h.label === "malicious_link")) {
+    const row = { ...analysis.ruleHit, fused: analysis.ruleHit.prob, threshold: 0.5 };
+    if (row.fused >= 0.5) hits.push(row);
+    else if (row.fused >= 0.25) weak.push(row);
+  }
+  hits.sort((a, b) => b.fused - a.fused);
+  weak.sort((a, b) => b.fused - a.fused);
+
+  // risk score: based on the strongest fused probability across ALL labels,
+  // not just hits - the model seeing 72% gov impersonation IS a risk signal
+  // even if it doesn't cross the calibrated threshold
+  const topFused = all.length ? Math.max(...all.map((r) => r.fused)) : 0;
+  let score = Math.min(100, Math.round(topFused * 100));
+  if (analysis.ruleHit && hits.some((h) => h.label === "malicious_link")) {
+    score = Math.max(score, Math.round(analysis.ruleHit.prob * 100));
+  }
 
   return { hits, weak, signals: analysis.signals, score, urls: analysis.urls };
 }

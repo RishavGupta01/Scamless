@@ -296,16 +296,11 @@ const DAMPENERS = [
   { w: -3.0, re: /(?:your |aapka |aapki )?(?:otp|code|pin) (?:is|hai) \d{4,8}\b.{0,80}(?:valid|expires|do not share|never share|kisi se share|10 min)/i },
   { w: -2.0, re: /(?:payment|bill|transaction) (?:of )?(?:rs\.? ?|inr|₹|\$)?[\d,]+ (?:was |has been )?(?:successful|paid|debited|credited|processed|auto-debited|auto-paid)/i },
   { w: -2.0, re: /(?:delivered|dispatched|out for delivery|shipped)\b.{0,60}\b(?:order|parcel|package|shipment|thank you)/i },
-  { w: -2.0, re: /(?:no action is needed|no action needed|you're all set|you are all set|no action required)/i },
-  { w: -2.0, re: /(?:unsubscribe here|unsubscribe at|manage your (?:preferences|subscription)|email preferences)/i },
-  { w: -1.5, re: /(?:didn't sign up|did not sign up|if you didn't|if you did not)\b/i },
-  { w: -1.5, re: /(?:security tips|threat alerts|digital footprint|stay (?:safe|informed|protected))/i },
   { w: -1.5, re: /(?:attached|please review|follow up|minutes of the|agenda|regarding the)/i },
   { w: -1.5, re: /(?:meeting|appointment|class|lecture|webinar)\b.{0,40}\b(?:at|on) \d{1,2}[:.]\d{2}/i },
   { w: -1.0, re: /(?:salary|invoice|receipt|refund) (?:of |for )?[\d,]+ (?:credited|processed|issued|paid)/i },
   { w: -1.0, re: /(?:temperature|weather|traffic|news|headlines) (?:is |are |update|report)/i },
   { w: -1.0, re: /(?:thank you for shopping|your order.*has been|tracking number)/i },
-  { w: -1.0, re: /(?:helpful|important|useful)\b.{0,30}\b(?:tips|alerts|updates|information)/i },
 ];
 
 // convergence bonus: when N rules from the same label fire, add a bonus
