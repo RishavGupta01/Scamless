@@ -83,7 +83,12 @@ def test_build_split_disjoint_and_replay(tmp_path, monkeypatch):
     from scamless.data import build
 
     msgs = [
-        {"text": f"message number {i} about things", "labels": [], "source": "a", "language": "en"}
+        {
+            "text": f"message number {i:03d} about the quarterly planning things",
+            "labels": [],
+            "source": "a",
+            "language": "en",
+        }
         for i in range(50)
     ]
     df = pd.DataFrame(build.dedupe(msgs))
@@ -93,7 +98,15 @@ def test_build_split_disjoint_and_replay(tmp_path, monkeypatch):
 
     # replay: old parquet rows merge into train only
     old = pd.DataFrame(
-        [{"text": "old replay row", "labels": ["generic_spam"], "source": "old", "language": "en"}] * 3
+        [
+            {
+                "text": f"old replay row {i} about something else entirely",
+                "labels": ["generic_spam"],
+                "source": "old",
+                "language": "en",
+            }
+            for i in range(3)
+        ]
     )
     old_path = tmp_path / "old_train.parquet"
     old.to_parquet(old_path)

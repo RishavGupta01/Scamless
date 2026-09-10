@@ -5,10 +5,10 @@ from scamless.data.build import dedupe, split_records
 
 def _msgs():
     return [
-        {"text": "win free prizes now click here", "labels": ["generic_spam"], "source": "a", "language": "en"},
-        {"text": "win free prizes now click here", "labels": ["generic_spam"], "source": "b", "language": "en"},
-        {"text": "please review the attached invoice for march", "labels": [], "source": "a", "language": "en"},
-        {"text": "verify your account at this secure link", "labels": ["phishing"], "source": "c", "language": "en"},
+        {"text": "win free prizes now click here to claim your reward today friend", "labels": ["generic_spam"], "source": "a", "language": "en"},
+        {"text": "win free prizes now click here to claim your reward today friend", "labels": ["generic_spam"], "source": "b", "language": "en"},
+        {"text": "please review the attached invoice for the march project work", "labels": [], "source": "a", "language": "en"},
+        {"text": "verify your account at this secure link within 24 hours now", "labels": ["phishing"], "source": "c", "language": "en"},
     ] * 10
 
 

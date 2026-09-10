@@ -10,7 +10,17 @@ import pathlib
 
 import pandas as pd
 
-from scamless.data import enron, nazario, phishing_hf, sms_spam, spamassassin, urls
+from scamless.data import (
+    enron,
+    multilingual_sms,
+    nazario,
+    phishing_hf,
+    seven_phishing,
+    sms_spam,
+    spamassassin,
+    urls,
+)
+from scamless.data.clean import clean_text
 from scamless.data.download import RAW
 
 PROCESSED = RAW.parent / "processed"
@@ -60,6 +70,20 @@ def collect_messages() -> list[dict]:
     else:
         print("hf_phishing_texts missing: run fetch_all first")
 
+    seven_dir = RAW / "seven_phishing"
+    if seven_dir.exists() and any(seven_dir.glob("*.parquet")):
+        records.extend(seven_phishing.collect())
+    else:
+        print("seven_phishing missing: run fetch_all first")
+
+    ml_csv = RAW / "multilingual_sms" / "data-augmented.csv"
+    if ml_csv.exists():
+        records.extend(
+            multilingual_sms.records_from_csv_bytes(ml_csv.read_bytes())
+        )
+    else:
+        print("multilingual_sms missing: run fetch_all first")
+
     try:
         from datasets import load_dataset
 
@@ -92,12 +116,20 @@ def collect_urls() -> list[dict]:
 def dedupe(records: list[dict]) -> list[dict]:
     seen: set[str] = set()
     out = []
+    dropped_empty = 0
     for r in records:
-        key = r["text"].strip().lower()
+        cleaned = clean_text(r["text"])
+        if not cleaned:
+            dropped_empty += 1
+            continue
+        r["text"] = cleaned
+        key = cleaned.lower()
         if key in seen:
             continue
         seen.add(key)
         out.append(r)
+    if dropped_empty:
+        print(f"cleaning removed {dropped_empty} degenerate texts")
     return out
 
 

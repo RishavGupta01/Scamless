@@ -20,6 +20,10 @@ from scamless.data.download import (
     fetch,
 )
 
+MULTILINGUAL_SMS = "dbarbedillo/SMS_Spam_Multilingual_Collection_Dataset"
+SEVEN_PHISHING = "puyang2025/seven-phishing-email-datasets"
+SEVEN_SHARDS = [f"train-0000{i}-of-00008.parquet" for i in range(8)]
+
 
 def run() -> None:
     session = requests.Session()
@@ -54,6 +58,21 @@ def run() -> None:
         "hf_phishing_texts",
         lambda: fetch(HF_PHISHING_TEXTS, RAW / "phishing_hf" / "texts.json", session),
     )
+
+    def _seven_phishing() -> None:
+        for shard in SEVEN_SHARDS:
+            url = f"https://huggingface.co/datasets/{SEVEN_PHISHING}/resolve/main/{shard}"
+            fetch(url, RAW / "seven_phishing" / shard, session)
+
+    guarded(
+        "multilingual_sms",
+        lambda: fetch(
+            f"https://huggingface.co/datasets/{MULTILINGUAL_SMS}/resolve/main/data-augmented.csv",
+            RAW / "multilingual_sms" / "data-augmented.csv",
+            session,
+        ),
+    )
+    guarded("seven_phishing", _seven_phishing)
 
     print(f"Raw corpora ready under {RAW}")
     if failures:
