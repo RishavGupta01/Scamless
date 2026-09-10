@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Learn every scam pattern Scamless detects - with red flags and the exact action to take." />
+  <title>Scamless - scam encyclopedia</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">SCAM<span>LESS</span></a>
+    <nav>
+      <a href="index.html">Scan</a>
+      <a href="learn.html" aria-current="page">Learn</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>Every scam pattern,<br /><span class="accent">and how to beat it.</span></h1>
+      <p class="sub">
+        These are the exact categories the Scamless detector is trained on.
+        Reading them once makes you harder to scam forever - awareness is the
+        layer that outlives any app.
+      </p>
+    </section>
+    <div id="learn-grid" class="learn-grid"></div>
+  </main>
+
+  <footer class="footer">
+    <p>Spotted a category we should add? The detector schema is append-only - new scam types ship without changing the app.</p>
+  </footer>
+
+  <script type="module">
+    import { CATEGORIES } from "./js/categories.js";
+    const grid = document.getElementById("learn-grid");
+    for (const [key, cat] of Object.entries(CATEGORIES)) {
+      const card = document.createElement("article");
+      card.className = "learn-card";
+      const h = document.createElement("h2");
+      h.textContent = cat.name;
+      const p = document.createElement("p");
+      p.textContent = cat.blurb;
+      const ul = document.createElement("ul");
+      for (const flag of cat.redFlags) {
+        const li = document.createElement("li");
+        li.textContent = flag;
+        ul.appendChild(li);
+      }
+      const action = document.createElement("p");
+      action.className = "action";
+      action.textContent = cat.action;
+      card.append(h, p, ul, action);
+      grid.appendChild(card);
+    }
+  </script>
+</body>
+</html>

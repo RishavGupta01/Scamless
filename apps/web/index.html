@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Scamless - private, on-device scam detection. Paste any message, get a verdict in milliseconds. Nothing leaves your device." />
+  <title>Scamless - on-device scam detection</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">SCAM<span>LESS</span></a>
+    <nav>
+      <a href="index.html" aria-current="page">Scan</a>
+      <a href="learn.html">Learn</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>Check any message.<br /><span class="accent">Privately, on your device.</span></h1>
+      <p class="sub">
+        Paste a suspicious SMS, email or chat message. Scamless runs a trained
+        detection model entirely inside your browser - no account, no uploads,
+        nothing ever leaves this device.
+      </p>
+    </section>
+
+    <section id="model-status" class="model-status" role="status">
+      <div class="status-line">
+        <span id="status-dot" class="dot" aria-hidden="true"></span>
+        <span id="status-text">Initializing&hellip;</span>
+      </div>
+      <div id="load-progress" class="progress" hidden>
+        <div id="load-bar" class="progress-bar"></div>
+      </div>
+      <div id="load-detail" class="status-detail"></div>
+    </section>
+
+    <section class="scanbox">
+      <label class="scan-label" for="input">Message to check</label>
+      <textarea id="input" rows="6" placeholder="Paste the suspicious message here&hellip;" spellcheck="false"></textarea>
+      <div class="scan-actions">
+        <button id="scan-btn" class="btn primary" disabled>Scan</button>
+        <button id="clear-btn" class="btn ghost">Clear</button>
+        <span id="engine-tag" class="engine-tag" hidden></span>
+      </div>
+    </section>
+
+    <section id="result" class="result" hidden aria-live="polite">
+      <div class="verdict-row">
+        <div class="risk-meter" aria-hidden="true">
+          <svg viewBox="0 0 120 120" width="120" height="120">
+            <circle class="meter-track" cx="60" cy="60" r="52" />
+            <circle id="meter-arc" class="meter-arc" cx="60" cy="60" r="52" />
+            <text id="meter-score" class="meter-score" x="60" y="66" text-anchor="middle">0</text>
+          </svg>
+        </div>
+        <div class="verdict-text">
+          <div id="verdict-band" class="verdict-band">--</div>
+          <div id="verdict-labels" class="verdict-labels"></div>
+        </div>
+      </div>
+
+      <div id="why-panel" class="why-panel">
+        <h2>Why</h2>
+        <ul id="why-list" class="why-list"></ul>
+      </div>
+
+      <div id="playbook" class="playbook" hidden>
+        <h2>What to do now</h2>
+        <p id="playbook-text"></p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Runs 100% on your device. No backend. No telemetry. No account.</p>
+    <p><a href="learn.html">Learn to spot scams yourself</a> - the awareness layer inside this app.</p>
+  </footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
