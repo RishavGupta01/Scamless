@@ -15,6 +15,7 @@ from scamless.data import (
     multilingual_sms,
     nazario,
     phishing_hf,
+    phishing_v2,
     seven_phishing,
     sms_spam,
     spamassassin,
@@ -29,6 +30,7 @@ SPLITS = {"train": 0.8, "val": 0.1, "test": 0.1}
 
 def collect_messages() -> list[dict]:
     records: list[dict] = []
+    extra_url_records: list[dict] = []  # url rows harvested from message corpora
     skipped = 0
 
     def guarded_parse(parse_fn, *args) -> dict | None:
@@ -84,6 +86,13 @@ def collect_messages() -> list[dict]:
     else:
         print("multilingual_sms missing: run fetch_all first")
 
+    if (RAW / "phishing_v2").exists() and any((RAW / "phishing_v2").glob("*.parquet")):
+        v2_messages, v2_urls = phishing_v2.collect()
+        records.extend(v2_messages)
+        extra_url_records.extend(v2_urls)
+    else:
+        print("phishing_v2 missing: run fetch_all first")
+
     try:
         from datasets import load_dataset
 
@@ -95,7 +104,7 @@ def collect_messages() -> list[dict]:
 
     if skipped:
         print(f"skipped {skipped} unreadable source files")
-    return records
+    return records, extra_url_records
 
 
 def collect_urls() -> list[dict]:
@@ -195,8 +204,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    messages = dedupe(collect_messages())
-    url_records = collect_urls()
+    messages, extra_urls = collect_messages()
+    messages = dedupe(messages)
+    url_records = collect_urls() + extra_urls
 
     msg_df = pd.DataFrame(messages)
     train, val, test = split_records(msg_df)

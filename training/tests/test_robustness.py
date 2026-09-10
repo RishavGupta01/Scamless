@@ -72,7 +72,7 @@ def test_build_survives_corrupt_files(tmp_path, monkeypatch):
     (sa / "bad.bin").write_bytes(b"\x00\xff\xfe garbage that breaks the email parser \x00")
     monkeypatch.setattr(build, "RAW", raw)
 
-    records = build.collect_messages()
+    records, _extra_urls = build.collect_messages()
     texts = [r["text"] for r in records]
     assert any("invoice" in t for t in texts)  # sms ham parsed
     assert any("prize" in t for t in texts)  # sms spam parsed

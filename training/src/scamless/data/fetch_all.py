@@ -21,6 +21,7 @@ from scamless.data.download import (
 )
 
 MULTILINGUAL_SMS = "dbarbedillo/SMS_Spam_Multilingual_Collection_Dataset"
+PHISHING_V2 = "cybersectony/PhishingEmailDetectionv2.0"
 SEVEN_PHISHING = "puyang2025/seven-phishing-email-datasets"
 SEVEN_SHARDS = [f"train-0000{i}-of-00008.parquet" for i in range(8)]
 
@@ -69,6 +70,14 @@ def run() -> None:
         lambda: fetch(
             f"https://huggingface.co/datasets/{MULTILINGUAL_SMS}/resolve/main/data-augmented.csv",
             RAW / "multilingual_sms" / "data-augmented.csv",
+            session,
+        ),
+    )
+    guarded(
+        "phishing_v2",
+        lambda: fetch(
+            f"https://huggingface.co/datasets/{PHISHING_V2}/resolve/main/data/train-00000-of-00002.parquet",
+            RAW / "phishing_v2" / "train-00000-of-00002.parquet",
             session,
         ),
     )
