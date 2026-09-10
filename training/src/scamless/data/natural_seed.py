@@ -40,7 +40,12 @@ def load_seed_files(seed_dir: pathlib.Path | None = None) -> list[dict]:
             except (json.JSONDecodeError, KeyError) as exc:
                 raise ValueError(f"{path.name}:{line_no}: malformed seed row ({exc})") from exc
             for label in labels:
-                label_index(label)  # raises on unknown label: loud, by design
+                try:
+                    label_index(label)  # unknown label must fail loudly, never silently train
+                except KeyError as exc:
+                    raise ValueError(
+                        f"{path.name}:{line_no}: unknown label '{label}' in seed row"
+                    ) from exc
             if len(text) < MIN_TEXT_CHARS:
                 rejected += 1
                 continue
