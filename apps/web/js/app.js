@@ -118,16 +118,24 @@ function animateScore(el, target) {
   requestAnimationFrame(step);
 }
 
-// tactic span highlighting: mark urgency language, links, codes and amounts
-// directly inside the scanned message (rule-based, deterministic)
+// tactic span highlighting: only fires on messages the model flagged as
+// SUSPICIOUS or DANGEROUS - annotating a SAFE message with scary colors
+// is misleading and trains users to ignore the highlights
 const TACTIC_PATTERNS = [
   { cls: "link", re: /\b(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi },
-  { cls: "otp", re: /\b\d{4,8}\b/g },
-  { cls: "money", re: /(?:rs\.?\s?|inr\s?|\$|€|£|₹)\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:k|lakh|crore|million))?|\b\d[\d,]+\s?(?:rupees|dollars|euros)\b/gi },
-  { cls: "urgency", re: /\b(?:urgent(?:ly)?|immediately|final warning|last chance|act now|suspended|deactivated|legal action|arrest(?:ed)?|digital arrest|virtual custody|expire[sd]?|perm(?:anently)?antly?)\b/gi },
+  { cls: "otp", re: /\b\d{6,8}\b/g },
+  { cls: "money", re: /(?:₹|Rs\.?\s?|INR|\$|€|£)\s?\d[\d,]*(?:\.\d+)?/g },
+  { cls: "urgency", re: /\b(?:urgent(?:ly)?|final warning|last chance|act now|immediately|within \d+ hours|digital arrest|virtual custody|legal action|arrest(?:ed)?)\b/gi },
 ];
 
-function annotate(text) {
+function annotate(text, hits) {
+  // no annotation for clean verdicts - showing scary highlights on a SAFE
+  // message trains users to ignore the pattern
+  if (!hits.length) {
+    $("annotated-panel").hidden = true;
+    return;
+  }
+
   const ranges = [];
   for (const { cls, re } of TACTIC_PATTERNS) {
     re.lastIndex = 0;
@@ -243,12 +251,7 @@ function renderScan(hits, weak, signals, score, engineTag, text) {
   renderLabels(hits);
   renderWhy(hits, weak, signals);
   renderPlaybook(hits);
-  if (text) {
-    annotate(text);
-    $("annotated-panel").hidden = false;
-  } else {
-    $("annotated-panel").hidden = true;
-  }
+  annotate(text, hits);
   $("result").hidden = false;
   const tag = $("engine-tag");
   tag.hidden = false;
